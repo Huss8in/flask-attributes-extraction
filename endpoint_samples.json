@@ -1,0 +1,153 @@
+{
+  "endpoints": {
+    "1_category_classify": {
+      "url": "POST http://localhost:6002/api/category/classify",
+      "description": "Single item classification",
+      "sample_input": {
+        "item_name": "Nike Air Max Running Shoes",
+        "description": "Comfortable running shoes with air cushioning",
+        "item_department": "Footwear",
+        "vendor_category": "fashion"
+      }
+    },
+    "2_category_classify_csv": {
+      "url": "POST http://localhost:6002/api/category/classify-csv",
+      "description": "Process CSV file from path",
+      "sample_input": {
+        "csv_path": "D:/path/to/your/products.csv"
+      },
+      "note": "CSV must have column 'Item (EN)'. Optional: 'Description (EN)', 'Category/Department (EN)', 'Vendor Category'"
+    },
+    "3_category_classify_batch": {
+      "url": "POST http://localhost:6002/api/category/classify-batch",
+      "description": "Parallel batch classification",
+      "sample_input": {
+        "items": [
+          {
+            "item_name": "Samsung Galaxy S23",
+            "description": "Latest smartphone with 5G",
+            "item_department": "Mobile Phones",
+            "vendor_category": "electronics"
+          },
+          {
+            "item_name": "Chocolate Cake",
+            "description": "Delicious chocolate layer cake",
+            "item_department": "Bakery",
+            "vendor_category": "groceries"
+          },
+          {
+            "item_name": "Blue Cotton T-Shirt",
+            "description": "Casual men's t-shirt",
+            "item_department": "Clothing",
+            "vendor_category": "fashion"
+          }
+        ],
+        "max_workers": 3
+      }
+    },
+    "4_attributes_extract": {
+      "url": "POST http://localhost:6002/api/attributes/extract",
+      "description": "Extract AI attributes",
+      "sample_input": {
+        "item_name": "Women's Red Cotton Dress",
+        "description": "Elegant summer dress with floral pattern",
+        "vendor_category": "fashion",
+        "shopping_category": "fashion",
+        "shopping_subcategory": "casual wear",
+        "item_category": "dress",
+        "images": []
+      },
+      "note": "Categories must be from classification result. Images are optional (paths to image files)"
+    },
+    "5_attributes_extract_batch": {
+      "url": "POST http://localhost:6002/api/attributes/extract-batch",
+      "description": "Parallel batch AI attribute extraction",
+      "sample_input": {
+        "items": [
+          {
+            "item_name": "Women's Red Cotton Dress",
+            "description": "Elegant summer dress with floral pattern",
+            "vendor_category": "fashion",
+            "shopping_category": "fashion",
+            "shopping_subcategory": "casual wear",
+            "item_category": "dress",
+            "images": []
+          },
+          {
+            "item_name": "Men's Blue Jeans",
+            "description": "Classic denim jeans",
+            "vendor_category": "fashion",
+            "shopping_category": "fashion",
+            "shopping_subcategory": "casual wear",
+            "item_category": "pant",
+            "images": []
+          },
+          {
+            "item_name": "Face Cream SPF 50",
+            "description": "Moisturizing face cream with sun protection",
+            "vendor_category": "beauty",
+            "shopping_category": "beauty",
+            "shopping_subcategory": "skincare",
+            "item_category": "face care",
+            "images": []
+          }
+        ],
+        "max_workers": 3
+      },
+      "note": "Processes multiple items in parallel. Use categories from classification results. max_workers controls parallel execution (default: 3)"
+    },
+    "6_translation_translate_single": {
+      "url": "POST http://localhost:6002/api/translation/translate",
+      "description": "Translate single text to Arabic",
+      "sample_input": {
+        "text": "Gender: Women\nColor: Red\nMaterial: Cotton\nPattern: Floral"
+      }
+    },
+    "7_translation_translate_batch": {
+      "url": "POST http://localhost:6002/api/translation/translate",
+      "description": "Translate multiple texts to Arabic",
+      "sample_input": {
+        "texts": [
+          "Color: Blue",
+          "Material: Cotton",
+          "Size: Medium",
+          "Gender: Men"
+        ]
+      }
+    },
+    "8_pipeline_process": {
+      "url": "POST http://localhost:6002/api/pipeline/process",
+      "description": "End-to-end: Classification -> Attributes -> Translation",
+      "sample_input": {
+        "item_name": "Adidas Blue Running Shoes",
+        "description": "Lightweight running shoes for men",
+        "item_department": "Footwear",
+        "vendor_category": "fashion",
+        "images": [],
+        "translate": true
+      },
+      "note": "Set translate=true to get Arabic translation, false to skip translation"
+    },
+    "9_pipeline_process_batch": {
+      "url": "POST http://localhost:6002/api/pipeline/process-batch",
+      "description": "Batch pipeline processing",
+      "sample_input": {
+        "items": [
+          {
+            "item_name": "Red Dress",
+            "description": "Summer dress",
+            "vendor_category": "fashion",
+            "images": []
+          },
+          {
+            "item_name": "Chocolate Bar",
+            "description": "Dark chocolate",
+            "vendor_category": "groceries",
+            "images": []
+          }
+        ],
+        "translate": false
+      }
+    }
+  }
+}

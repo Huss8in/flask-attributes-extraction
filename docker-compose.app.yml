@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  flask-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flask-unified-server
+    ports:
+      - "6002:6002"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - API_URL=${API_URL}
+      - GRADPROJECT_API_URL=http://gradproject:5000/predict
+    restart: unless-stopped
+    networks:
+      - app-network
+    depends_on:
+      - gradproject
+
+  gradproject:
+    build:
+      context: ./GradProject
+      dockerfile: Dockerfile
+    container_name: gradproject-service
+    expose:
+      - "5000"
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

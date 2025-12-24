@@ -11,23 +11,14 @@ from datetime import timedelta
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Set environment variables BEFORE importing transformers to avoid chat template lookup
-os.environ['TRANSFORMERS_OFFLINE'] = '0'
-os.environ['HF_HUB_DISABLE_IMPLICIT_TOKEN'] = '0'
-
 from flask import Flask, request, jsonify
 import requests
 import pandas as pd
 from tqdm import tqdm
 from dotenv import load_dotenv
-import numpy as np
 
 # OpenAI
 from openai import OpenAI
-
-# Torch and Transformers (for GradProject model)
-import torch
-from transformers import AutoModel, AutoConfig, AutoTokenizer
 
 # Load environment variables
 load_dotenv()
@@ -52,8 +43,8 @@ PHI4_MODEL_NAME = "phi4:latest"
 RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
 
 # AI Attributes configuration
-HF_TOKEN = os.getenv("HF_TOKEN")
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
+GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 
 # Translation configuration
 AYA_API_URL = "http://100.75.237.4:11434/api/generate"
@@ -68,52 +59,6 @@ try:
     from openAI_model.ai_att_mapping import category_mapping
 except ImportError:
     from ai_att_mapping import category_mapping
-
-# ============================================================
-# MONKEY PATCHING FOR GRADPROJECT MODEL
-# ============================================================
-# Patch HuggingFace to disable chat template lookup
-import huggingface_hub
-from huggingface_hub.errors import RepositoryNotFoundError
-
-_original_list_repo_tree = huggingface_hub.hf_api.HfApi.list_repo_tree
-
-def patched_list_repo_tree(self, repo_id, *args, **kwargs):
-    """Patched version that catches 404 errors for template lookups"""
-    try:
-        return _original_list_repo_tree(self, repo_id, *args, **kwargs)
-    except (RepositoryNotFoundError, Exception) as e:
-        error_str = str(e)
-        if 'additional_chat_templates' in error_str or '404' in error_str:
-            return iter([])  # Return empty iterator
-        raise
-
-huggingface_hub.hf_api.HfApi.list_repo_tree = patched_list_repo_tree
-
-# Patch transformers list_repo_templates
-from transformers.utils import hub as transformers_hub
-
-_original_list_repo_templates = transformers_hub.list_repo_templates
-
-def patched_list_repo_templates(*args, **kwargs):
-    """Patched version that returns empty list to avoid 404 errors"""
-    try:
-        return _original_list_repo_templates(*args, **kwargs)
-    except Exception:
-        return []
-
-transformers_hub.list_repo_templates = patched_list_repo_templates
-
-# Patch AutoTokenizer
-_original_from_pretrained = AutoTokenizer.from_pretrained
-
-def patched_from_pretrained(pretrained_model_name_or_path, *args, **kwargs):
-    """Patched version that disables chat template lookup"""
-    if 'use_fast' not in kwargs:
-        kwargs['use_fast'] = False
-    return _original_from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
-
-AutoTokenizer.from_pretrained = patched_from_pretrained
 
 # ============================================================
 # FLASK APP INITIALIZATION
@@ -138,109 +83,10 @@ else:
 last_api_call_time = 0
 
 # ============================================================
-# MODEL INITIALIZATION - GRADPROJECT (LAZY-LOADED)
+# GRADPROJECT SERVICE - EXTERNAL API
 # ============================================================
-grad_model = None
-device = None
-
-def load_grad_model():
-    """Load GradProject model on GPU (lazy-loaded)"""
-    global grad_model, device
-
-    if grad_model is not None:
-        print("[INFO] GradProject model already loaded")
-        return True
-
-    if not HF_TOKEN:
-        print("[WARNING] HF_TOKEN not found - GradProject model disabled")
-        return False
-
-    try:
-        if not torch.cuda.is_available():
-            print("[WARNING] CUDA not available - GradProject model disabled")
-            return False
-
-        device = torch.device("cuda:0")
-        torch.cuda.set_device(device)
-
-        print(f"[INFO] Loading GradProject model on {torch.cuda.get_device_name(0)}...")
-
-        config = AutoConfig.from_pretrained(
-            "Blip-MAE-Botit/BlipMAEModel",
-            trust_remote_code=True,
-            token=HF_TOKEN,
-        )
-        config.model_type = "fashion"
-
-        grad_model = AutoModel.from_pretrained(
-            "Blip-MAE-Botit/BlipMAEModel",
-            trust_remote_code=True,
-            config=config,
-            token=HF_TOKEN
-        ).to(device)
-
-        grad_model.eval()
-
-        # Patch the model's _init_tokenizer method to handle errors gracefully
-        original_init_tokenizer = grad_model._init_tokenizer
-        tokenizer_initialized = [False]  # Use list to allow modification in closure
-
-        def safe_init_tokenizer():
-            """Wrapped tokenizer initialization that catches errors"""
-            if tokenizer_initialized[0]:
-                return  # Already initialized
-            try:
-                from transformers import AutoProcessor, BlipImageProcessor
-                import transformers
-                from transformers import AutoTokenizer as AT
-
-                print("[INFO] Initializing tokenizer...")
-
-                # Load tokenizer with error handling
-                try:
-                    grad_model.text_tokenizer = AT.from_pretrained(
-                        grad_model.tokenizer_repo_id,
-                        use_fast=False,
-                        trust_remote_code=True,
-                        token=HF_TOKEN,
-                        local_files_only=False
-                    )
-                except Exception as e:
-                    if '404' in str(e) or 'additional_chat_templates' in str(e):
-                        print("[WARNING] Chat template 404, trying local files only...")
-                        grad_model.text_tokenizer = AT.from_pretrained(
-                            grad_model.tokenizer_repo_id,
-                            use_fast=False,
-                            trust_remote_code=True,
-                            token=HF_TOKEN,
-                            local_files_only=True
-                        )
-                    else:
-                        raise
-
-                grad_model.text_tokenizer.add_special_tokens({'bos_token':'[DEC]'})
-                grad_model.text_tokenizer.add_special_tokens({"additional_special_tokens":['[ENC]']})
-                grad_model.text_tokenizer.enc_token_id = grad_model.text_tokenizer.additional_special_tokens_ids[0]
-
-                # Use BlipImageProcessor directly to avoid missing processor_config.json
-                grad_model.image_processor = BlipImageProcessor.from_pretrained(
-                    "Salesforce/blip-image-captioning-base"
-                )
-                tokenizer_initialized[0] = True
-                print("[INFO] Tokenizer initialized successfully")
-            except Exception as e:
-                print(f"[ERROR] Failed to initialize tokenizer: {str(e)}")
-                raise
-
-        grad_model._init_tokenizer = safe_init_tokenizer
-
-        print("[INFO] GradProject model loaded successfully")
-        return True
-
-    except Exception as e:
-        print(f"[ERROR] Failed to load GradProject model: {str(e)}")
-        print("[INFO] Continuing without GradProject model - will use OpenAI only")
-        return False
+# GradProject runs as a separate service on port 5000
+# No model loading needed - just make HTTP requests
 
 
 # ============================================================
@@ -621,20 +467,9 @@ def classify_single_item(item_data, index):
 # AI ATTRIBUTES SERVICE - HELPER FUNCTIONS
 # ============================================================
 
-def convert_to_python(obj):
-    """Convert numpy types to Python types"""
-    if isinstance(obj, dict):
-        return {k: convert_to_python(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [convert_to_python(v) for v in obj]
-    if isinstance(obj, np.generic):
-        return obj.item()
-    return obj
-
-
 def predict_with_grad_model(images, description, category):
-    """Use GradProject model to predict color and material"""
-    if grad_model is None:
+    """Call external GradProject service to predict color and material"""
+    if not images or len(images) == 0:
         return None, None, {}
 
     try:
@@ -655,23 +490,22 @@ def predict_with_grad_model(images, description, category):
 
         grad_category = category_singular_to_plural.get(category.lower(), category.lower())
 
-        print(f"[DEBUG] Calling grad model with category: {grad_category}, {len(images)} image(s)")
+        print(f"[DEBUG] Calling external GradProject service with category: {grad_category}, {len(images)} image(s)")
 
-        with torch.inference_mode():
-            results = grad_model.generate(
-                images_pth=images,
-                descriptions=[description] * len(images),
-                categories=[grad_category] * len(images),
-                attributes=["color", "material"],
-                return_confidences=True
-            )
+        # Make HTTP request to external GradProject service
+        payload = {
+            "images": images,
+            "descriptions": [description],
+            "categories": [grad_category],
+            "attributes": ["color", "material"]
+        }
 
-        results = convert_to_python(results)
+        response = requests.post(GRADPROJECT_API_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
 
-        if not results:
-            return None, None, {}
-
-        attributes = results[0][0] if results else {}
+        # Extract attributes from response
+        attributes = result.get("attributes", {})
 
         color = None
         material = None
@@ -699,6 +533,10 @@ def predict_with_grad_model(images, description, category):
 
         return color, material, grad_data
 
+    except requests.exceptions.ConnectionError:
+        print(f"[ERROR] Cannot connect to GradProject service at {GRADPROJECT_API_URL}")
+        print("[INFO] Make sure GradProject service is running on port 5000")
+        return None, None, {}
     except Exception as e:
         print(f"[ERROR] GradProject prediction failed: {str(e)}")
         import traceback
@@ -807,23 +645,15 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     grad_material = None
     grad_data = {}
 
-    if (grad_model is not None and
-        shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES and
+    if (shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES and
         images and len(images) > 0):
 
-        print(f"[INFO] Using grad model for {shopping_category}...")
-
-        # Lazy-load GradProject model if not already loaded
-        if grad_model is None:
-            print("[INFO] Lazy-loading GradProject model...")
-            load_grad_model()
-
-        if grad_model is not None:
-            grad_color, grad_material, grad_data = predict_with_grad_model(
-                images,
-                description,
-                item_category.lower().strip()
-            )
+        print(f"[INFO] Calling external GradProject service for {shopping_category}...")
+        grad_color, grad_material, grad_data = predict_with_grad_model(
+            images,
+            description,
+            item_category.lower().strip()
+        )
 
     # Step 2: Build OpenAI prompt with grad hints
     input_text = f"""Item Name: {item_name}
@@ -868,6 +698,67 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
 
     result = run_openai_model(prompt)
     return result, grad_data
+
+
+def extract_single_item_attributes(item_data, index):
+    """Extract AI attributes for a single item - used for parallel processing"""
+    try:
+        item_name = item_data.get('item_name', '')
+        description = item_data.get('description', '')
+        vendor_category = item_data.get('vendor_category', '')
+        shopping_category = item_data.get('shopping_category', '')
+        shopping_subcategory = item_data.get('shopping_subcategory', '')
+        item_category = item_data.get('item_category', '')
+        images = item_data.get('images', [])
+
+        if not all([item_name, shopping_category, item_category]):
+            return index, {
+                "success": False,
+                "message": "item_name, shopping_category, and item_category are required",
+                "ai_attributes": "",
+                "ai_attributes_array": [],
+                "grad_model_used": False,
+                "grad_predictions": None
+            }
+
+        allowed_categories = ["fashion", "beauty", "home and garden"]
+        if shopping_category.lower().strip() not in allowed_categories:
+            return index, {
+                "success": False,
+                "message": f"Category '{shopping_category}' not allowed. Allowed: {', '.join(allowed_categories)}",
+                "ai_attributes": "",
+                "ai_attributes_array": [],
+                "grad_model_used": False,
+                "grad_predictions": None
+            }
+
+        # Extract attributes
+        attributes, grad_data = extract_ai_attributes(
+            item_name, description, vendor_category,
+            shopping_category, shopping_subcategory, item_category,
+            images
+        )
+
+        result = {
+            "success": True,
+            "message": "AI attributes extracted successfully.",
+            "ai_attributes": attributes,
+            "ai_attributes_array": attributes.split('\n') if attributes else [],
+            "grad_model_used": bool(grad_data),
+            "grad_predictions": grad_data if grad_data else None
+        }
+
+        return index, result
+
+    except Exception as e:
+        return index, {
+            "success": False,
+            "message": str(e),
+            "ai_attributes": "",
+            "ai_attributes_array": [],
+            "grad_model_used": False,
+            "grad_predictions": None
+        }
 
 
 # ============================================================
@@ -1262,15 +1153,82 @@ def extract_attributes():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/attributes/extract-batch', methods=['POST'])
+def extract_attributes_batch():
+    """Process multiple items in parallel for AI attribute extraction"""
+    try:
+        start_time = time.time()
+        data = request.get_json()
+
+        if not data or 'items' not in data:
+            return jsonify({"error": "items array is required"}), 400
+
+        items = data.get('items', [])
+        max_workers = data.get('max_workers', 3)
+
+        if not isinstance(items, list):
+            return jsonify({"error": "items must be an array"}), 400
+
+        if len(items) == 0:
+            return jsonify({"error": "items array cannot be empty"}), 400
+
+        total_items = len(items)
+        print(f"\n[Batch Parallel AI Attributes] Processing {total_items} items with {max_workers} workers...")
+
+        results = [None] * total_items
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(extract_single_item_attributes, item, idx): idx
+                for idx, item in enumerate(items)
+            }
+
+            for future in as_completed(future_to_index):
+                index, result = future.result()
+                results[index] = result
+
+        successful = sum(1 for r in results if r.get('success', False))
+        failed = total_items - successful
+
+        end_time = time.time()
+        elapsed_seconds = end_time - start_time
+        hours, remainder = divmod(int(elapsed_seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        print(f"[Batch Parallel AI Attributes] Completed {total_items} items in {time_formatted}")
+        print(f"[Batch Parallel AI Attributes] Success: {successful}/{total_items} | Failed: {failed}/{total_items}")
+
+        return jsonify({
+            "success": True,
+            "results": results,
+            "total_items": total_items,
+            "successful_extractions": successful,
+            "failed_extractions": failed,
+            "processing_time": time_formatted,
+            "processing_time_seconds": round(elapsed_seconds, 2)
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/attributes/health', methods=['GET'])
 def attributes_health():
     """AI Attributes health check"""
+    # Check if external GradProject service is available
+    gradproject_available = False
+    try:
+        response = requests.get(GRADPROJECT_API_URL.replace('/predict', '/health'), timeout=2)
+        gradproject_available = response.status_code == 200
+    except:
+        pass
+
     return jsonify({
         "status": "healthy",
         "service": "AI Attributes Service",
-        "grad_model_loaded": grad_model is not None,
-        "openai_configured": bool(OPENAI_API_KEY),
-        "gpu_available": torch.cuda.is_available()
+        "gradproject_service_available": gradproject_available,
+        "openai_configured": bool(OPENAI_API_KEY)
     })
 
 
@@ -1300,11 +1258,19 @@ def translate_endpoint():
             })
 
         if "text" in data:
-            return jsonify({
-                "translation": translate_to_arabic(data["text"])
-            })
+            # Support both single string and array in "text" field
+            if isinstance(data["text"], list):
+                # Treat as batch translation
+                return jsonify({
+                    "translations": translate_batch(data["text"])
+                })
+            else:
+                # Single translation
+                return jsonify({
+                    "translation": translate_to_arabic(data["text"])
+                })
 
-        return jsonify({"error": "Provide 'text' or 'texts'"}), 400
+        return jsonify({"error": "Provide 'text' (string or array) or 'texts' (array)"}), 400
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1499,12 +1465,20 @@ def pipeline_process_batch():
 @app.route('/health', methods=['GET'])
 def global_health():
     """Global health check for all services"""
+    # Check if external GradProject service is available
+    gradproject_available = False
+    try:
+        response = requests.get(GRADPROJECT_API_URL.replace('/predict', '/health'), timeout=2)
+        gradproject_available = response.status_code == 200
+    except:
+        pass
+
     return jsonify({
         "status": "healthy",
         "services": ["category", "ai_attributes", "translation", "pipeline"],
         "models": {
             "openai": bool(OPENAI_API_KEY),
-            "gradproject_loaded": grad_model is not None,
+            "gradproject_service": gradproject_available,
             "ollama": True
         },
         "port": FLASK_PORT
@@ -1529,8 +1503,7 @@ if __name__ == '__main__':
         print(f"  Category Model: OpenAI gpt-4o-mini")
 
     print(f"  OpenAI API Key: {'[OK] Configured' if OPENAI_API_KEY else '[X] Missing'}")
-    print(f"  HF Token: {'[OK] Configured' if HF_TOKEN else '[X] Missing (GradProject disabled)'}")
-    print(f"  GPU: {'[OK] Available' if torch.cuda.is_available() else '[X] Not available'}")
+    print(f"  GradProject Service: {GRADPROJECT_API_URL}")
 
     print("\nEndpoints:")
     print("  Category Service:")
@@ -1540,10 +1513,11 @@ if __name__ == '__main__':
 
     print("\n  AI Attributes Service:")
     print("    POST /api/attributes/extract        - Extract AI attributes")
+    print("    POST /api/attributes/extract-batch  - Parallel batch AI attribute extraction")
     print("    GET  /api/attributes/health         - Health check")
 
     print("\n  Translation Service:")
-    print("    POST /api/translation/translate     - English → Arabic translation")
+    print("    POST /api/translation/translate     - English -> Arabic translation")
     print("    GET  /api/translation/health        - Health check")
 
     print("\n  Pipeline Service:")
@@ -1557,8 +1531,8 @@ if __name__ == '__main__':
     print(f"Starting unified server on http://{FLASK_HOST}:{FLASK_PORT}")
     print("="*70 + "\n")
 
-    # Note: GradProject model will be lazy-loaded on first use
-    print("[INFO] GradProject model will be lazy-loaded on first /api/attributes/extract request")
+    # Note: GradProject is now an external service
+    print("[INFO] GradProject runs as external service - ensure it's running on port 5000")
     print("")
 
     app.run(debug=FLASK_DEBUG, host=FLASK_HOST, port=FLASK_PORT)

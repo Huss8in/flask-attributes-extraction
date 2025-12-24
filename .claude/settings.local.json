@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(./venv/Scripts/pip install:*)",
+      "Bash(tasklist:*)",
+      "Bash(./venv/Scripts/python.exe:*)"
     ]
   }
 }
