@@ -4,6 +4,8 @@ from transformers import AutoModel, AutoConfig
 from dotenv import load_dotenv
 import os
 import numpy as np
+import language_tool_python
+import json
 
 # ------------------------------------------------------------------
 # ENV
@@ -59,6 +61,13 @@ assert next(model.parameters()).is_cuda, "Model is NOT on GPU"
 print("[INFO] Model loaded on CUDA successfully.")
 
 # ------------------------------------------------------------------
+# GRAMMAR CHECKER
+# ------------------------------------------------------------------
+print("[INFO] Initializing grammar checker...")
+grammar_tool = language_tool_python.LanguageTool('en-US')
+print("[INFO] Grammar checker initialized.")
+
+# ------------------------------------------------------------------
 # UTILS
 # ------------------------------------------------------------------
 def convert_to_python(obj):
@@ -93,6 +102,31 @@ def aggregate_predictions(results):
         }
 
     return aggregated
+
+
+def check_grammar_in_json(json_str):
+    """
+    Parse JSON string, check grammar in all text fields, and return corrected JSON
+    """
+    try:
+        data = json.loads(json_str) if isinstance(json_str, str) else json_str
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid JSON: {str(e)}"}
+
+    def process_value(value):
+        if isinstance(value, str):
+            corrected = grammar_tool.correct(value)
+            return corrected
+        elif isinstance(value, dict):
+            return {k: process_value(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [process_value(item) for item in value]
+        else:
+            return value
+
+    corrected_data = process_value(data)
+    return corrected_data
+
 
 # ------------------------------------------------------------------
 # API
@@ -138,6 +172,48 @@ def predict():
         "category": category,
         "attributes": aggregated
     })
+
+
+@app.route("/grammar-check", methods=["POST"])
+def grammar_check():
+    """
+    Grammar check endpoint that supports both single and batch processing
+
+    Request body can be:
+    1. Single JSON object/string: {"text": "This are wrong"}
+    2. Array of JSON objects/strings: [{"text": "This are wrong"}, {"text": "I has error"}]
+
+    Returns corrected JSON with the same structure
+    """
+    data = request.json
+
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    # Check if it's a batch (array) or single request
+    is_batch = isinstance(data, list)
+
+    if is_batch:
+        # Process batch
+        results = []
+        for item in data:
+            corrected = check_grammar_in_json(item)
+            results.append(corrected)
+
+        return jsonify({
+            "batch": True,
+            "count": len(results),
+            "results": results
+        })
+    else:
+        # Process single item
+        corrected = check_grammar_in_json(data)
+
+        return jsonify({
+            "batch": False,
+            "result": corrected
+        })
+
 
 # ------------------------------------------------------------------
 # RUN
