@@ -47,7 +47,7 @@ GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 
 # Translation configuration
-AYA_API_URL = "http://100.75.237.4:11434/api/generate"
+AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
 AYA_MODEL_NAME = "aya:8b"
 
 # Import mapping files
