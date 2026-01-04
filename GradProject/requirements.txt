@@ -8,3 +8,4 @@ requests==2.32.5
 Flask==3.0.0
 python-dotenv==1.0.1
 language-tool-python==2.8
+language_tool_python==3.2.2
