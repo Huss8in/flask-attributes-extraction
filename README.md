@@ -62,12 +62,14 @@ curl http://localhost:6002/health
 
 - **POST** `/api/attributes/extract` - Extract AI attributes for single item
 - **POST** `/api/attributes/extract-batch` - Parallel batch AI attribute extraction (multiprocessing)
-- **GET** `/api/attributes/health` - Health check
+
+### Grammar Check
+
+- **POST** `/api/grammar/check` - Grammar check for text (supports single string or batch array)
 
 ### Translation
 
 - **POST** `/api/translation/translate` - English → Arabic translation
-- **GET** `/api/translation/health` - Health check
 
 ### Pipeline (Combined Workflow)
 

@@ -55,10 +55,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from mapping import *
 
 # Import AI attributes mapping
-try:
-    from openAI_model.ai_att_mapping import category_mapping
-except ImportError:
-    from ai_att_mapping import category_mapping
+from ai_att_mapping import category_mapping
 
 # ============================================================
 # FLASK APP INITIALIZATION
@@ -1233,6 +1230,59 @@ def attributes_health():
 
 
 # ============================================================
+# GRAMMAR CHECK SERVICE - ROUTES
+# ============================================================
+
+@app.route('/api/grammar/check', methods=['POST'])
+def grammar_check():
+    """
+    Grammar check endpoint - supports both single and batch processing
+    Forwards requests to GradProject grammar-check service
+
+    Input JSON (single):
+    { "text": "This are wrong" }
+
+    Input JSON (batch/array):
+    [{ "text": "This are wrong" }, { "text": "I has error" }]
+
+    Returns corrected text with the same structure
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Forward request to GradProject grammar-check service
+        gradproject_grammar_url = GRADPROJECT_API_URL.replace('/predict', '/grammar-check')
+
+        try:
+            response = requests.post(gradproject_grammar_url, json=data, timeout=30)
+            response.raise_for_status()
+            return jsonify(response.json()), 200
+
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                "error": f"Cannot connect to GradProject grammar service at {gradproject_grammar_url}",
+                "message": "Make sure GradProject service is running"
+            }), 503
+
+        except requests.exceptions.Timeout:
+            return jsonify({
+                "error": "Grammar check request timed out",
+                "message": "The request took too long to process"
+            }), 504
+
+        except Exception as e:
+            return jsonify({
+                "error": f"Grammar check failed: {str(e)}"
+            }), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # TRANSLATION SERVICE - ROUTES
 # ============================================================
 
@@ -1514,11 +1564,12 @@ if __name__ == '__main__':
     print("\n  AI Attributes Service:")
     print("    POST /api/attributes/extract        - Extract AI attributes")
     print("    POST /api/attributes/extract-batch  - Parallel batch AI attribute extraction")
-    print("    GET  /api/attributes/health         - Health check")
+
+    print("\n  Grammar Check Service:")
+    print("    POST /api/grammar/check             - Grammar check (single or batch)")
 
     print("\n  Translation Service:")
     print("    POST /api/translation/translate     - English -> Arabic translation")
-    print("    GET  /api/translation/health        - Health check")
 
     print("\n  Pipeline Service:")
     print("    POST /api/pipeline/process          - End-to-end processing")
