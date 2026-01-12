@@ -96,14 +96,67 @@
       },
       "note": "Processes multiple items in parallel. Use categories from classification results. max_workers controls parallel execution (default: 3)"
     },
-    "6_translation_translate_single": {
+    "6_grammar_check_single": {
+      "url": "POST http://localhost:6002/api/grammar/check",
+      "description": "Grammar check for single text",
+      "sample_input": {
+        "text": "This are wrong sentence"
+      },
+      "sample_output": {
+        "original_text": "This are wrong sentence",
+        "corrected_text": "This is a wrong sentence",
+        "has_changes": true,
+        "changes_summary": "Changed from 'This are wrong sentence' to 'This is a wrong sentence'",
+        "errors_found": 1
+      }
+    },
+    "7_grammar_check_batch": {
+      "url": "POST http://localhost:6002/api/grammar/check",
+      "description": "Grammar check for multiple texts (batch)",
+      "sample_input": [
+        {
+          "text": "This are wrong"
+        },
+        {
+          "text": "I has error"
+        },
+        {
+          "text": "She go to school"
+        }
+      ],
+      "sample_output": [
+        {
+          "original_text": "This are wrong",
+          "corrected_text": "This is wrong",
+          "has_changes": true,
+          "changes_summary": "Changed from 'This are wrong' to 'This is wrong'",
+          "errors_found": 1
+        },
+        {
+          "original_text": "I has error",
+          "corrected_text": "I have an error",
+          "has_changes": true,
+          "changes_summary": "Changed from 'I has error' to 'I have an error'",
+          "errors_found": 2
+        },
+        {
+          "original_text": "She go to school",
+          "corrected_text": "She goes to school",
+          "has_changes": true,
+          "changes_summary": "Changed from 'She go to school' to 'She goes to school'",
+          "errors_found": 1
+        }
+      ],
+      "note": "Send an array of objects for batch processing. Each object must have a 'text' field. Uses LanguageTool locally."
+    },
+    "8_translation_translate_single": {
       "url": "POST http://localhost:6002/api/translation/translate",
       "description": "Translate single text to Arabic",
       "sample_input": {
         "text": "Gender: Women\nColor: Red\nMaterial: Cotton\nPattern: Floral"
       }
     },
-    "7_translation_translate_batch": {
+    "9_translation_translate_batch": {
       "url": "POST http://localhost:6002/api/translation/translate",
       "description": "Translate multiple texts to Arabic",
       "sample_input": {
@@ -115,7 +168,7 @@
         ]
       }
     },
-    "8_pipeline_process": {
+    "10_pipeline_process": {
       "url": "POST http://localhost:6002/api/pipeline/process",
       "description": "End-to-end: Classification -> Attributes -> Translation",
       "sample_input": {
@@ -128,7 +181,7 @@
       },
       "note": "Set translate=true to get Arabic translation, false to skip translation"
     },
-    "9_pipeline_process_batch": {
+    "11_pipeline_process_batch": {
       "url": "POST http://localhost:6002/api/pipeline/process-batch",
       "description": "Batch pipeline processing",
       "sample_input": {

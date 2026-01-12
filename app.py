@@ -16,6 +16,7 @@ import requests
 import pandas as pd
 from tqdm import tqdm
 from dotenv import load_dotenv
+import language_tool_python
 
 # OpenAI
 from openai import OpenAI
@@ -78,6 +79,21 @@ else:
 
 # Track last API call time for rate limiting (category service)
 last_api_call_time = 0
+
+# ============================================================
+# GRAMMAR CHECK - LANGUAGE TOOL INITIALIZATION
+# ============================================================
+# Initialize LanguageTool for grammar checking (lazy loading)
+grammar_tool = None
+
+def get_grammar_tool():
+    """Lazy load grammar tool on first use"""
+    global grammar_tool
+    if grammar_tool is None:
+        print("[INFO] Initializing LanguageTool for grammar checking...")
+        grammar_tool = language_tool_python.LanguageTool('en-US')
+        print("[INFO] LanguageTool initialized successfully")
+    return grammar_tool
 
 # ============================================================
 # GRADPROJECT SERVICE - EXTERNAL API
@@ -531,14 +547,13 @@ def predict_with_grad_model(images, description, category):
         return color, material, grad_data
 
     except requests.exceptions.ConnectionError:
-        print(f"[ERROR] Cannot connect to GradProject service at {GRADPROJECT_API_URL}")
-        print("[INFO] Make sure GradProject service is running on port 5000")
-        return None, None, {}
+        print(f"[WARNING] Cannot connect to GradProject service at {GRADPROJECT_API_URL}")
+        print("[INFO] Continuing without GradProject predictions...")
+        return None, None, {"warning": "GradProject service unavailable - predictions not included"}
     except Exception as e:
-        print(f"[ERROR] GradProject prediction failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None, None, {}
+        print(f"[WARNING] GradProject prediction failed: {str(e)}")
+        print("[INFO] Continuing without GradProject predictions...")
+        return None, None, {"warning": f"GradProject prediction failed: {str(e)}"}
 
 
 def get_attribute_template(shopping_category, item_category):
@@ -736,13 +751,19 @@ def extract_single_item_attributes(item_data, index):
             images
         )
 
+        # Check if there's a warning from grad model
+        warning_message = None
+        if grad_data and "warning" in grad_data:
+            warning_message = grad_data["warning"]
+
         result = {
             "success": True,
             "message": "AI attributes extracted successfully.",
             "ai_attributes": attributes,
             "ai_attributes_array": attributes.split('\n') if attributes else [],
-            "grad_model_used": bool(grad_data),
-            "grad_predictions": grad_data if grad_data else None
+            "grad_model_used": bool(grad_data) and "warning" not in grad_data,
+            "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
+            "warning": warning_message
         }
 
         return index, result
@@ -1137,13 +1158,19 @@ def extract_attributes():
             images
         )
 
+        # Check if there's a warning from grad model
+        warning_message = None
+        if grad_data and "warning" in grad_data:
+            warning_message = grad_data["warning"]
+
         return jsonify({
             "success": True,
             "message": "AI attributes extracted successfully.",
             "ai_attributes": attributes,
             "ai_attributes_array": attributes.split('\n') if attributes else [],
-            "grad_model_used": bool(grad_data),
-            "grad_predictions": grad_data if grad_data else None
+            "grad_model_used": bool(grad_data) and "warning" not in grad_data,
+            "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
+            "warning": warning_message
         }), 200
 
     except Exception as e:
@@ -1237,7 +1264,7 @@ def attributes_health():
 def grammar_check():
     """
     Grammar check endpoint - supports both single and batch processing
-    Forwards requests to GradProject grammar-check service
+    Uses LanguageTool locally (no external service required)
 
     Input JSON (single):
     { "text": "This are wrong" }
@@ -1245,7 +1272,7 @@ def grammar_check():
     Input JSON (batch/array):
     [{ "text": "This are wrong" }, { "text": "I has error" }]
 
-    Returns corrected text with the same structure
+    Returns corrected text with original text and changes made
     """
     try:
         data = request.get_json()
@@ -1253,33 +1280,69 @@ def grammar_check():
         if not data:
             return jsonify({"error": "No data provided"}), 400
 
-        # Forward request to GradProject grammar-check service
-        gradproject_grammar_url = GRADPROJECT_API_URL.replace('/predict', '/grammar-check')
+        # Get grammar tool instance
+        tool = get_grammar_tool()
 
-        try:
-            response = requests.post(gradproject_grammar_url, json=data, timeout=30)
-            response.raise_for_status()
-            return jsonify(response.json()), 200
+        # Store original text(s)
+        is_batch = isinstance(data, list)
 
-        except requests.exceptions.ConnectionError:
+        if is_batch:
+            # Batch processing
+            results = []
+            for item in data:
+                original_text = item.get("text", "")
+                if not original_text:
+                    results.append({
+                        "original_text": "",
+                        "corrected_text": "",
+                        "has_changes": False,
+                        "changes_summary": "No text provided"
+                    })
+                    continue
+
+                # Check and correct grammar
+                matches = tool.check(original_text)
+                corrected_text = language_tool_python.utils.correct(original_text, matches)
+
+                results.append({
+                    "original_text": original_text,
+                    "corrected_text": corrected_text,
+                    "has_changes": original_text != corrected_text,
+                    "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
+                    "errors_found": len(matches)
+                })
+
+            return jsonify(results), 200
+        else:
+            # Single processing
+            original_text = data.get("text", "")
+
+            if not original_text:
+                return jsonify({
+                    "original_text": "",
+                    "corrected_text": "",
+                    "has_changes": False,
+                    "changes_summary": "No text provided",
+                    "errors_found": 0
+                }), 200
+
+            # Check and correct grammar
+            matches = tool.check(original_text)
+            corrected_text = language_tool_python.utils.correct(original_text, matches)
+
             return jsonify({
-                "error": f"Cannot connect to GradProject grammar service at {gradproject_grammar_url}",
-                "message": "Make sure GradProject service is running"
-            }), 503
-
-        except requests.exceptions.Timeout:
-            return jsonify({
-                "error": "Grammar check request timed out",
-                "message": "The request took too long to process"
-            }), 504
-
-        except Exception as e:
-            return jsonify({
-                "error": f"Grammar check failed: {str(e)}"
-            }), 500
+                "original_text": original_text,
+                "corrected_text": corrected_text,
+                "has_changes": original_text != corrected_text,
+                "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
+                "errors_found": len(matches)
+            }), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": f"Grammar check failed: {str(e)}",
+            "message": "Error processing grammar check"
+        }), 500
 
 
 # ============================================================
@@ -1292,32 +1355,43 @@ def translate_endpoint():
     Translate English to Arabic (single or batch)
 
     Input JSON (single):
-    { "text": "Your text here" }
+    { "text": "Your text here", "vendor_name": "VendorX" }
 
     Input JSON (batch):
-    { "texts": ["Text 1", "Text 2"] }
+    { "texts": ["Text 1", "Text 2"], "vendor_names": ["Vendor1", "Vendor2"] }
     """
     try:
         data = request.get_json(force=True)
+        vendor_name = data.get("vendor_name", "")
 
         if "texts" in data:
             if not isinstance(data["texts"], list):
                 return jsonify({"error": "'texts' must be a list"}), 400
+
+            vendor_names = data.get("vendor_names", [])
+            translations = translate_batch(data["texts"])
+
             return jsonify({
-                "translations": translate_batch(data["texts"])
+                "translations": translations,
+                "vendor_names": vendor_names if vendor_names else [vendor_name] * len(translations)
             })
 
         if "text" in data:
             # Support both single string and array in "text" field
             if isinstance(data["text"], list):
                 # Treat as batch translation
+                vendor_names = data.get("vendor_names", [])
+                translations = translate_batch(data["text"])
+
                 return jsonify({
-                    "translations": translate_batch(data["text"])
+                    "translations": translations,
+                    "vendor_names": vendor_names if vendor_names else [vendor_name] * len(translations)
                 })
             else:
                 # Single translation
                 return jsonify({
-                    "translation": translate_to_arabic(data["text"])
+                    "translation": translate_to_arabic(data["text"]),
+                    "vendor_name": vendor_name
                 })
 
         return jsonify({"error": "Provide 'text' (string or array) or 'texts' (array)"}), 400
@@ -1413,8 +1487,12 @@ def pipeline_process():
             )
 
             ai_attributes_result["english"] = attributes
-            ai_attributes_result["grad_model_used"] = bool(grad_data)
-            ai_attributes_result["grad_predictions"] = grad_data if grad_data else None
+            ai_attributes_result["grad_model_used"] = bool(grad_data) and "warning" not in grad_data
+            ai_attributes_result["grad_predictions"] = grad_data if grad_data and "warning" not in grad_data else None
+
+            # Add warning if GradProject unavailable
+            if grad_data and "warning" in grad_data:
+                ai_attributes_result["warning"] = grad_data["warning"]
 
             # Step 3: Translation (if requested)
             if should_translate and attributes:
