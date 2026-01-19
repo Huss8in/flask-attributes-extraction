@@ -20,3 +20,5 @@ DOCKER_README.md
 
 docker-start.bat
 ENDPOINT_SAMPLES.md
+
+.DS_Store

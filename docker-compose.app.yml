@@ -11,29 +11,7 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - API_URL=${API_URL}
-      - GRADPROJECT_API_URL=http://gradproject:5000/predict
-    restart: unless-stopped
-    networks:
-      - app-network
-    depends_on:
-      - gradproject
-
-  gradproject:
-    build:
-      context: ./GradProject
-      dockerfile: Dockerfile
-    container_name: gradproject-service
-    expose:
-      - "5000"
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - AYA_API_URL=${AYA_API_URL}
     restart: unless-stopped
     networks:
       - app-network
