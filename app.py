@@ -1260,48 +1260,32 @@ def attributes_health():
 # DESCRIPTION GENERATION SERVICE - HELPER FUNCTIONS
 # ============================================================
 
-def generate_item_description(item_name, item_department, variant_name, images=None,
-                               shopping_category=None, item_category=None):
+def generate_item_description(item_name, item_department, variant_name,
+                               ai_attributes=None):
     """
-    Generate a description for an item using OpenAI with optional GradProject hints.
+    Generate a description for an item using OpenAI.
 
     Primary inputs: item_name, item_department, variant_name
-    Contextual hints: color and material from GradProject (if images provided and service available)
-
-    Note: Works without GradProject - if service is unavailable, generates description using only primary inputs.
+    Optional: ai_attributes dict with color, material, style, etc.
     """
 
-    # Step 1: Try to get hints from GradProject if images and category are provided
-    grad_color = None
-    grad_material = None
-    grad_data = {}
-
-    # Only attempt GradProject if we have images AND a supported category
-    if (images and len(images) > 0 and
-        shopping_category and
-        shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES):
-
-        category_for_grad = item_category if item_category else "general"
-        print(f"[INFO] Attempting to get hints from GradProject service...")
-        grad_color, grad_material, grad_data = predict_with_grad_model(
-            images,
-            "",  # No existing description
-            category_for_grad.lower().strip()
-        )
-
-        if grad_color or grad_material:
-            print(f"[INFO] GradProject hints received - Color: {grad_color}, Material: {grad_material}")
-        elif "warning" in grad_data:
-            print(f"[INFO] GradProject unavailable, continuing without visual hints...")
-    else:
-        print(f"[INFO] Generating description without GradProject (no images or unsupported category)")
-
-    # Step 2: Build the prompt for OpenAI
-    grad_hints = ""
-    if grad_color:
-        grad_hints += f"\n- Detected Color (from image analysis): {grad_color}"
-    if grad_material:
-        grad_hints += f"\n- Detected Material (from image analysis): {grad_material}"
+    # Build hints from optional AI attributes
+    hints = ""
+    if ai_attributes:
+        if ai_attributes.get('color'):
+            hints += f"\n- Color: {ai_attributes['color']}"
+        if ai_attributes.get('material'):
+            hints += f"\n- Material: {ai_attributes['material']}"
+        if ai_attributes.get('style'):
+            hints += f"\n- Style: {ai_attributes['style']}"
+        if ai_attributes.get('pattern'):
+            hints += f"\n- Pattern: {ai_attributes['pattern']}"
+        if ai_attributes.get('size'):
+            hints += f"\n- Size: {ai_attributes['size']}"
+        # Allow any additional attributes
+        for key, value in ai_attributes.items():
+            if key not in ['color', 'material', 'style', 'pattern', 'size'] and value:
+                hints += f"\n- {key.replace('_', ' ').title()}: {value}"
 
     prompt = f"""You are an e-commerce product description writer. Generate a concise, professional product description.
 
@@ -1309,15 +1293,12 @@ PRIMARY INFORMATION:
 - Item Name: {item_name}
 - Department: {item_department if item_department else 'Not specified'}
 - Variant: {variant_name if variant_name else 'Not specified'}
-{f"- Shopping Category: {shopping_category}" if shopping_category else ""}
-{f"- Item Category: {item_category}" if item_category else ""}
-
-{f"VISUAL HINTS (use these to enhance the description):{grad_hints}" if grad_hints else ""}
+{f"PRODUCT ATTRIBUTES (incorporate naturally):{hints}" if hints else ""}
 
 INSTRUCTIONS:
 1. Write a clear, engaging product description (2-4 sentences)
 2. Focus on key features and benefits
-3. If visual hints are provided, incorporate color and material naturally
+3. If attributes are provided, incorporate them naturally
 4. Use professional e-commerce language
 5. Do NOT include prices or availability
 6. Do NOT make up specific measurements or specifications
@@ -1349,7 +1330,7 @@ OUTPUT: Write ONLY the product description, no additional text or formatting.
         # Clean up any quotes or extra formatting
         description = description.strip('"\'')
 
-        return description, grad_data
+        return description
 
     except Exception as e:
         print(f"[ERROR] Description generation failed: {str(e)}")
@@ -1365,26 +1346,24 @@ def generate_description():
     """
     Generate a product description for items without descriptions.
 
-    Uses item_name, item_department, and variant_name as primary inputs.
-    Optionally uses GradProject (color/material predictions) as contextual hints
-    when images are provided.
-
     Input JSON:
     {
         "item_name": "Blue Cotton T-Shirt",           # Required
-        "item_department": "Men's Clothing",          # Optional but recommended
+        "item_department": "Men's Clothing",          # Optional
         "variant_name": "Large",                       # Optional
-        "images": ["https://..."],                     # Optional - for GradProject hints
-        "shopping_category": "fashion",                # Optional - needed for GradProject
-        "item_category": "t-shirt"                     # Optional - improves hint accuracy
+        "ai_attributes": {                             # Optional - hints for description
+            "color": "blue",
+            "material": "cotton",
+            "style": "casual",
+            "pattern": "solid",
+            ...any other attributes
+        }
     }
 
     Returns:
     {
         "success": true,
-        "description": "Generated product description...",
-        "grad_hints_used": true/false,
-        "grad_predictions": { color: {...}, material: {...} }
+        "description": "Generated product description..."
     }
     """
     try:
@@ -1398,14 +1377,10 @@ def generate_description():
                 "error": "item_name is required"
             }), 400
 
-        # Primary optional fields
+        # Optional fields
         item_department = data.get('item_department', '').strip()
         variant_name = data.get('variant_name', '').strip()
-
-        # Optional fields for GradProject hints
-        images = data.get('images', [])
-        shopping_category = data.get('shopping_category', '').strip()
-        item_category = data.get('item_category', '').strip()
+        ai_attributes = data.get('ai_attributes', {})
 
         # Check OpenAI configuration
         if not OPENAI_API_KEY:
@@ -1415,26 +1390,16 @@ def generate_description():
             }), 500
 
         # Generate description
-        description, grad_data = generate_item_description(
+        description = generate_item_description(
             item_name=item_name,
             item_department=item_department,
             variant_name=variant_name,
-            images=images,
-            shopping_category=shopping_category,
-            item_category=item_category
+            ai_attributes=ai_attributes
         )
-
-        # Check for warnings from GradProject
-        warning_message = None
-        if grad_data and "warning" in grad_data:
-            warning_message = grad_data["warning"]
 
         return jsonify({
             "success": True,
-            "description": description,
-            "grad_hints_used": bool(grad_data) and "warning" not in grad_data,
-            "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
-            "warning": warning_message
+            "description": description
         }), 200
 
     except Exception as e:
@@ -1456,9 +1421,11 @@ def generate_description_batch():
                 "item_name": "...",
                 "item_department": "...",
                 "variant_name": "...",
-                "images": [...],
-                "shopping_category": "...",
-                "item_category": "..."
+                "ai_attributes": {
+                    "color": "...",
+                    "material": "...",
+                    ...
+                }
             }
         ],
         "max_workers": 3  # Optional, default 3
@@ -1494,25 +1461,16 @@ def generate_description_batch():
                         "description": ""
                     }
 
-                description, grad_data = generate_item_description(
+                description = generate_item_description(
                     item_name=item_name,
                     item_department=item_data.get('item_department', '').strip(),
                     variant_name=item_data.get('variant_name', '').strip(),
-                    images=item_data.get('images', []),
-                    shopping_category=item_data.get('shopping_category', '').strip(),
-                    item_category=item_data.get('item_category', '').strip()
+                    ai_attributes=item_data.get('ai_attributes', {})
                 )
-
-                warning_message = None
-                if grad_data and "warning" in grad_data:
-                    warning_message = grad_data["warning"]
 
                 return index, {
                     "success": True,
-                    "description": description,
-                    "grad_hints_used": bool(grad_data) and "warning" not in grad_data,
-                    "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
-                    "warning": warning_message
+                    "description": description
                 }
 
             except Exception as e:

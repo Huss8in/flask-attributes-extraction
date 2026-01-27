@@ -106,35 +106,29 @@
       },
       "sample_output": {
         "success": true,
-        "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts.",
-        "grad_hints_used": false,
-        "grad_predictions": null,
-        "warning": null
+        "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts."
       },
       "note": "item_name is required. item_department and variant_name are optional but recommended for better descriptions."
     },
-    "7_description_generate_with_hints": {
+    "7_description_generate_with_attributes": {
       "url": "POST http://localhost:6002/api/description/generate",
-      "description": "Generate description with GradProject visual hints (color/material from images)",
+      "description": "Generate description with optional AI attributes (color, material, style, etc.)",
       "sample_input": {
         "item_name": "Summer Dress",
         "item_department": "Women's Clothing",
         "variant_name": "Medium",
-        "images": ["https://example.com/dress.jpg"],
-        "shopping_category": "fashion",
-        "item_category": "dress"
+        "ai_attributes": {
+          "color": "red",
+          "material": "silk",
+          "style": "elegant",
+          "pattern": "solid"
+        }
       },
       "sample_output": {
         "success": true,
-        "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event.",
-        "grad_hints_used": true,
-        "grad_predictions": {
-          "color": { "value": "red", "confidence": 0.92 },
-          "material": { "value": "silk", "confidence": 0.85 }
-        },
-        "warning": null
+        "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event."
       },
-      "note": "GradProject hints are used when images + shopping_category (fashion or home and garden) are provided. The detected color and material are incorporated into the description."
+      "note": "ai_attributes is optional. You can pass any attributes like color, material, style, pattern, size, etc."
     },
     "8_description_generate_batch": {
       "url": "POST http://localhost:6002/api/description/generate-batch",
@@ -150,16 +144,19 @@
             "item_name": "Leather Handbag",
             "item_department": "Accessories",
             "variant_name": "Brown",
-            "images": ["https://example.com/bag.jpg"],
-            "shopping_category": "fashion",
-            "item_category": "bag"
+            "ai_attributes": {
+              "color": "brown",
+              "material": "leather"
+            }
           },
           {
             "item_name": "Wooden Coffee Table",
             "item_department": "Furniture",
             "variant_name": "Oak Finish",
-            "shopping_category": "home and garden",
-            "item_category": "table"
+            "ai_attributes": {
+              "material": "wood",
+              "style": "modern"
+            }
           }
         ],
         "max_workers": 3
@@ -169,27 +166,15 @@
         "results": [
           {
             "success": true,
-            "description": "This classic blue cotton t-shirt offers comfortable everyday wear...",
-            "grad_hints_used": false,
-            "grad_predictions": null,
-            "warning": null
+            "description": "This classic blue cotton t-shirt offers comfortable everyday wear..."
           },
           {
             "success": true,
-            "description": "This sophisticated brown leather handbag combines style and functionality...",
-            "grad_hints_used": true,
-            "grad_predictions": {
-              "color": { "value": "brown", "confidence": 0.89 },
-              "material": { "value": "leather", "confidence": 0.94 }
-            },
-            "warning": null
+            "description": "This sophisticated brown leather handbag combines style and functionality..."
           },
           {
             "success": true,
-            "description": "This elegant wooden coffee table features a beautiful oak finish...",
-            "grad_hints_used": false,
-            "grad_predictions": null,
-            "warning": null
+            "description": "This elegant modern wooden coffee table features a beautiful oak finish..."
           }
         ],
         "total_items": 3,
@@ -198,7 +183,7 @@
         "processing_time": "00:00:05",
         "processing_time_seconds": 5.23
       },
-      "note": "Processes multiple items in parallel. max_workers controls parallel execution (default: 3)"
+      "note": "Processes multiple items in parallel. ai_attributes is optional for each item. max_workers controls parallel execution (default: 3)"
     },
     "9_grammar_check_single": {
       "url": "POST http://localhost:6002/api/grammar/check",

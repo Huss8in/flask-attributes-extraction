@@ -99,11 +99,12 @@ app.py
   ├── Imports ai_att_mapping.py   → Attribute templates
   ├── Uses .env                    → API keys
   ├── Uses LanguageTool           → Local grammar checking
-  └── Optionally uses GradProject → Image-based AI predictions (color/material)
+  └── Optionally uses GradProject → Image-based AI predictions (for AI Attributes only)
 
 User Request → app.py → Uses mappings + API keys → Returns result
 Grammar Check → app.py → LanguageTool (local) → Returns corrected text
 AI Attributes → app.py → OpenAI + Optional GradProject → Returns attributes
+Description → app.py → OpenAI + Optional ai_attributes → Returns description
 ```
 
 ## File Dependencies
@@ -202,12 +203,12 @@ The Grammar Check endpoint `/api/grammar/check` provides grammar correction for 
 
 ## Description Generation Details
 
-The Description Generation endpoint `/api/description/generate` creates professional product descriptions using OpenAI. It uses item information as primary input and optionally incorporates visual hints from the GradProject service.
+The Description Generation endpoint `/api/description/generate` creates professional product descriptions using OpenAI. It uses item information as primary input and optionally accepts AI attributes (color, material, style, etc.) to enhance the description.
 
 ### How It Works
 
 1. **Primary Inputs**: `item_name`, `item_department`, and `variant_name` are used as the main context
-2. **Visual Hints (Optional)**: When `images` and `shopping_category` are provided, the GradProject service analyzes images to detect color and material
+2. **AI Attributes (Optional)**: Pass attributes like color, material, style, pattern directly to enhance the description
 3. **AI Generation**: OpenAI generates a professional description incorporating all available information
 
 ### Input Fields
@@ -217,9 +218,7 @@ The Description Generation endpoint `/api/description/generate` creates professi
 | `item_name` | Yes | Product name |
 | `item_department` | No | Department/category (e.g., "Men's Clothing") |
 | `variant_name` | No | Variant info (e.g., "Large", "Blue") |
-| `images` | No | Array of image URLs for GradProject hints |
-| `shopping_category` | No | Required for GradProject (e.g., "fashion") |
-| `item_category` | No | Improves GradProject accuracy (e.g., "t-shirt") |
+| `ai_attributes` | No | Object with attributes like color, material, style, pattern, size, etc. |
 
 ### Single Description
 
@@ -236,14 +235,11 @@ The Description Generation endpoint `/api/description/generate` creates professi
 ```json
 {
   "success": true,
-  "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts.",
-  "grad_hints_used": false,
-  "grad_predictions": null,
-  "warning": null
+  "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts."
 }
 ```
 
-### With GradProject Hints
+### With AI Attributes
 
 **Request:**
 ```json
@@ -251,9 +247,12 @@ The Description Generation endpoint `/api/description/generate` creates professi
   "item_name": "Summer Dress",
   "item_department": "Women's Clothing",
   "variant_name": "Medium",
-  "images": ["https://example.com/dress.jpg"],
-  "shopping_category": "fashion",
-  "item_category": "dress"
+  "ai_attributes": {
+    "color": "red",
+    "material": "silk",
+    "style": "elegant",
+    "pattern": "solid"
+  }
 }
 ```
 
@@ -261,27 +260,26 @@ The Description Generation endpoint `/api/description/generate` creates professi
 ```json
 {
   "success": true,
-  "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event.",
-  "grad_hints_used": true,
-  "grad_predictions": {
-    "color": { "value": "red", "confidence": 0.92 },
-    "material": { "value": "silk", "confidence": 0.85 }
-  },
-  "warning": null
+  "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event."
 }
 ```
 
-**Note**: GradProject hints are only used when:
-- `images` array is provided with at least one image
-- `shopping_category` is "fashion" or "home and garden"
+**Note**: You can pass any attributes in `ai_attributes` - common ones include:
+- `color`: Product color (e.g., "red", "blue", "navy")
+- `material`: Product material (e.g., "cotton", "silk", "leather")
+- `style`: Style description (e.g., "casual", "elegant", "modern")
+- `pattern`: Pattern type (e.g., "solid", "striped", "floral")
+- `size`: Size info (e.g., "large", "medium")
+- Any custom attribute will be included in the prompt
 
 ## Notes
 
 - `mapping.py` and `ai_att_mapping.py` are **data files** - edit them to add/modify categories and attributes
 - `app.py` is the **only server file** - all logic is consolidated here
 - `.env` must contain valid API keys for the server to work
-- GradProject model (GPU) is **optional** for AI Attributes endpoint:
+- GradProject model (GPU) is **optional** for AI Attributes endpoint only:
   - If GradProject is running: Provides image-based color and material detection
   - If GradProject is not running: Shows warning but continues with OpenAI-based attributes extraction
+- Description Generation does **not** require GradProject - uses OpenAI with optional `ai_attributes` input
 - Batch endpoints use multiprocessing to handle multiple requests simultaneously for better performance
-- Grammar check uses LanguageTool locally and works independently without GradProject
+- Grammar check uses LanguageTool locally and works independently
