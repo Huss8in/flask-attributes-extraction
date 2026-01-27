@@ -1257,6 +1257,310 @@ def attributes_health():
 
 
 # ============================================================
+# DESCRIPTION GENERATION SERVICE - HELPER FUNCTIONS
+# ============================================================
+
+def generate_item_description(item_name, item_department, variant_name, images=None,
+                               shopping_category=None, item_category=None):
+    """
+    Generate a description for an item using OpenAI with optional GradProject hints.
+
+    Primary inputs: item_name, item_department, variant_name
+    Contextual hints: color and material from GradProject (if images provided and service available)
+
+    Note: Works without GradProject - if service is unavailable, generates description using only primary inputs.
+    """
+
+    # Step 1: Try to get hints from GradProject if images and category are provided
+    grad_color = None
+    grad_material = None
+    grad_data = {}
+
+    # Only attempt GradProject if we have images AND a supported category
+    if (images and len(images) > 0 and
+        shopping_category and
+        shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES):
+
+        category_for_grad = item_category if item_category else "general"
+        print(f"[INFO] Attempting to get hints from GradProject service...")
+        grad_color, grad_material, grad_data = predict_with_grad_model(
+            images,
+            "",  # No existing description
+            category_for_grad.lower().strip()
+        )
+
+        if grad_color or grad_material:
+            print(f"[INFO] GradProject hints received - Color: {grad_color}, Material: {grad_material}")
+        elif "warning" in grad_data:
+            print(f"[INFO] GradProject unavailable, continuing without visual hints...")
+    else:
+        print(f"[INFO] Generating description without GradProject (no images or unsupported category)")
+
+    # Step 2: Build the prompt for OpenAI
+    grad_hints = ""
+    if grad_color:
+        grad_hints += f"\n- Detected Color (from image analysis): {grad_color}"
+    if grad_material:
+        grad_hints += f"\n- Detected Material (from image analysis): {grad_material}"
+
+    prompt = f"""You are an e-commerce product description writer. Generate a concise, professional product description.
+
+PRIMARY INFORMATION:
+- Item Name: {item_name}
+- Department: {item_department if item_department else 'Not specified'}
+- Variant: {variant_name if variant_name else 'Not specified'}
+{f"- Shopping Category: {shopping_category}" if shopping_category else ""}
+{f"- Item Category: {item_category}" if item_category else ""}
+
+{f"VISUAL HINTS (use these to enhance the description):{grad_hints}" if grad_hints else ""}
+
+INSTRUCTIONS:
+1. Write a clear, engaging product description (2-4 sentences)
+2. Focus on key features and benefits
+3. If visual hints are provided, incorporate color and material naturally
+4. Use professional e-commerce language
+5. Do NOT include prices or availability
+6. Do NOT make up specific measurements or specifications
+7. Keep it concise and informative
+
+OUTPUT: Write ONLY the product description, no additional text or formatting.
+"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": OPENAI_MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": "You are a professional e-commerce copywriter who creates concise, engaging product descriptions."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 200,
+            "temperature": 0.7
+        }
+
+        print(f"[DEBUG] Calling OpenAI API for description generation...")
+        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r.raise_for_status()
+        description = r.json()["choices"][0]["message"]["content"].strip()
+
+        # Clean up any quotes or extra formatting
+        description = description.strip('"\'')
+
+        return description, grad_data
+
+    except Exception as e:
+        print(f"[ERROR] Description generation failed: {str(e)}")
+        raise
+
+
+# ============================================================
+# DESCRIPTION GENERATION SERVICE - ROUTES
+# ============================================================
+
+@app.route('/api/description/generate', methods=['POST'])
+def generate_description():
+    """
+    Generate a product description for items without descriptions.
+
+    Uses item_name, item_department, and variant_name as primary inputs.
+    Optionally uses GradProject (color/material predictions) as contextual hints
+    when images are provided.
+
+    Input JSON:
+    {
+        "item_name": "Blue Cotton T-Shirt",           # Required
+        "item_department": "Men's Clothing",          # Optional but recommended
+        "variant_name": "Large",                       # Optional
+        "images": ["https://..."],                     # Optional - for GradProject hints
+        "shopping_category": "fashion",                # Optional - needed for GradProject
+        "item_category": "t-shirt"                     # Optional - improves hint accuracy
+    }
+
+    Returns:
+    {
+        "success": true,
+        "description": "Generated product description...",
+        "grad_hints_used": true/false,
+        "grad_predictions": { color: {...}, material: {...} }
+    }
+    """
+    try:
+        data = request.get_json()
+
+        # Required field
+        item_name = data.get('item_name', '').strip()
+        if not item_name:
+            return jsonify({
+                "success": False,
+                "error": "item_name is required"
+            }), 400
+
+        # Primary optional fields
+        item_department = data.get('item_department', '').strip()
+        variant_name = data.get('variant_name', '').strip()
+
+        # Optional fields for GradProject hints
+        images = data.get('images', [])
+        shopping_category = data.get('shopping_category', '').strip()
+        item_category = data.get('item_category', '').strip()
+
+        # Check OpenAI configuration
+        if not OPENAI_API_KEY:
+            return jsonify({
+                "success": False,
+                "error": "OpenAI API key not configured"
+            }), 500
+
+        # Generate description
+        description, grad_data = generate_item_description(
+            item_name=item_name,
+            item_department=item_department,
+            variant_name=variant_name,
+            images=images,
+            shopping_category=shopping_category,
+            item_category=item_category
+        )
+
+        # Check for warnings from GradProject
+        warning_message = None
+        if grad_data and "warning" in grad_data:
+            warning_message = grad_data["warning"]
+
+        return jsonify({
+            "success": True,
+            "description": description,
+            "grad_hints_used": bool(grad_data) and "warning" not in grad_data,
+            "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
+            "warning": warning_message
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/api/description/generate-batch', methods=['POST'])
+def generate_description_batch():
+    """
+    Generate descriptions for multiple items in parallel.
+
+    Input JSON:
+    {
+        "items": [
+            {
+                "item_name": "...",
+                "item_department": "...",
+                "variant_name": "...",
+                "images": [...],
+                "shopping_category": "...",
+                "item_category": "..."
+            }
+        ],
+        "max_workers": 3  # Optional, default 3
+    }
+    """
+    try:
+        start_time = time.time()
+        data = request.get_json()
+
+        if not data or 'items' not in data:
+            return jsonify({"error": "items array is required"}), 400
+
+        items = data.get('items', [])
+        max_workers = data.get('max_workers', 3)
+
+        if not isinstance(items, list):
+            return jsonify({"error": "items must be an array"}), 400
+
+        if len(items) == 0:
+            return jsonify({"error": "items array cannot be empty"}), 400
+
+        total_items = len(items)
+        print(f"\n[Batch Description Generation] Processing {total_items} items with {max_workers} workers...")
+
+        def generate_single_description(item_data, index):
+            """Process a single item for description generation"""
+            try:
+                item_name = item_data.get('item_name', '').strip()
+                if not item_name:
+                    return index, {
+                        "success": False,
+                        "error": "item_name is required",
+                        "description": ""
+                    }
+
+                description, grad_data = generate_item_description(
+                    item_name=item_name,
+                    item_department=item_data.get('item_department', '').strip(),
+                    variant_name=item_data.get('variant_name', '').strip(),
+                    images=item_data.get('images', []),
+                    shopping_category=item_data.get('shopping_category', '').strip(),
+                    item_category=item_data.get('item_category', '').strip()
+                )
+
+                warning_message = None
+                if grad_data and "warning" in grad_data:
+                    warning_message = grad_data["warning"]
+
+                return index, {
+                    "success": True,
+                    "description": description,
+                    "grad_hints_used": bool(grad_data) and "warning" not in grad_data,
+                    "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
+                    "warning": warning_message
+                }
+
+            except Exception as e:
+                return index, {
+                    "success": False,
+                    "error": str(e),
+                    "description": ""
+                }
+
+        results = [None] * total_items
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(generate_single_description, item, idx): idx
+                for idx, item in enumerate(items)
+            }
+
+            for future in as_completed(future_to_index):
+                index, result = future.result()
+                results[index] = result
+
+        successful = sum(1 for r in results if r.get('success', False))
+        failed = total_items - successful
+
+        end_time = time.time()
+        elapsed_seconds = end_time - start_time
+        hours, remainder = divmod(int(elapsed_seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        print(f"[Batch Description Generation] Completed {total_items} items in {time_formatted}")
+        print(f"[Batch Description Generation] Success: {successful}/{total_items} | Failed: {failed}/{total_items}")
+
+        return jsonify({
+            "success": True,
+            "results": results,
+            "total_items": total_items,
+            "successful_generations": successful,
+            "failed_generations": failed,
+            "processing_time": time_formatted,
+            "processing_time_seconds": round(elapsed_seconds, 2)
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # GRAMMAR CHECK SERVICE - ROUTES
 # ============================================================
 
@@ -1603,7 +1907,7 @@ def global_health():
 
     return jsonify({
         "status": "healthy",
-        "services": ["category", "ai_attributes", "translation", "pipeline"],
+        "services": ["category", "ai_attributes", "description", "grammar", "translation", "pipeline"],
         "models": {
             "openai": bool(OPENAI_API_KEY),
             "gradproject_service": gradproject_available,
@@ -1642,6 +1946,10 @@ if __name__ == '__main__':
     print("\n  AI Attributes Service:")
     print("    POST /api/attributes/extract        - Extract AI attributes")
     print("    POST /api/attributes/extract-batch  - Parallel batch AI attribute extraction")
+
+    print("\n  Description Generation Service:")
+    print("    POST /api/description/generate      - Generate item description")
+    print("    POST /api/description/generate-batch - Batch description generation")
 
     print("\n  Grammar Check Service:")
     print("    POST /api/grammar/check             - Grammar check (single or batch)")

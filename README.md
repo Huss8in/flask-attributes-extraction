@@ -63,6 +63,11 @@ curl http://localhost:6002/health
 - **POST** `/api/attributes/extract` - Extract AI attributes for single item
 - **POST** `/api/attributes/extract-batch` - Parallel batch AI attribute extraction (multiprocessing)
 
+### Description Generation
+
+- **POST** `/api/description/generate` - Generate product description for items without descriptions
+- **POST** `/api/description/generate-batch` - Parallel batch description generation
+
 ### Grammar Check
 
 - **POST** `/api/grammar/check` - Grammar check for text (supports single and batch processing)
@@ -194,6 +199,81 @@ The Grammar Check endpoint `/api/grammar/check` provides grammar correction for 
 - `errors_found`: Number of grammar errors detected
 
 **Note**: This endpoint uses LanguageTool locally and works independently without requiring GradProject service.
+
+## Description Generation Details
+
+The Description Generation endpoint `/api/description/generate` creates professional product descriptions using OpenAI. It uses item information as primary input and optionally incorporates visual hints from the GradProject service.
+
+### How It Works
+
+1. **Primary Inputs**: `item_name`, `item_department`, and `variant_name` are used as the main context
+2. **Visual Hints (Optional)**: When `images` and `shopping_category` are provided, the GradProject service analyzes images to detect color and material
+3. **AI Generation**: OpenAI generates a professional description incorporating all available information
+
+### Input Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `item_name` | Yes | Product name |
+| `item_department` | No | Department/category (e.g., "Men's Clothing") |
+| `variant_name` | No | Variant info (e.g., "Large", "Blue") |
+| `images` | No | Array of image URLs for GradProject hints |
+| `shopping_category` | No | Required for GradProject (e.g., "fashion") |
+| `item_category` | No | Improves GradProject accuracy (e.g., "t-shirt") |
+
+### Single Description
+
+**Request:**
+```json
+{
+  "item_name": "Blue Cotton T-Shirt",
+  "item_department": "Men's Clothing",
+  "variant_name": "Large"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts.",
+  "grad_hints_used": false,
+  "grad_predictions": null,
+  "warning": null
+}
+```
+
+### With GradProject Hints
+
+**Request:**
+```json
+{
+  "item_name": "Summer Dress",
+  "item_department": "Women's Clothing",
+  "variant_name": "Medium",
+  "images": ["https://example.com/dress.jpg"],
+  "shopping_category": "fashion",
+  "item_category": "dress"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event.",
+  "grad_hints_used": true,
+  "grad_predictions": {
+    "color": { "value": "red", "confidence": 0.92 },
+    "material": { "value": "silk", "confidence": 0.85 }
+  },
+  "warning": null
+}
+```
+
+**Note**: GradProject hints are only used when:
+- `images` array is provided with at least one image
+- `shopping_category` is "fashion" or "home and garden"
 
 ## Notes
 

@@ -96,7 +96,111 @@
       },
       "note": "Processes multiple items in parallel. Use categories from classification results. max_workers controls parallel execution (default: 3)"
     },
-    "6_grammar_check_single": {
+    "6_description_generate": {
+      "url": "POST http://localhost:6002/api/description/generate",
+      "description": "Generate product description for items without descriptions",
+      "sample_input": {
+        "item_name": "Blue Cotton T-Shirt",
+        "item_department": "Men's Clothing",
+        "variant_name": "Large"
+      },
+      "sample_output": {
+        "success": true,
+        "description": "This classic blue cotton t-shirt offers comfortable everyday wear with a relaxed fit. Made from soft, breathable cotton fabric, it's perfect for casual occasions and pairs easily with jeans or shorts.",
+        "grad_hints_used": false,
+        "grad_predictions": null,
+        "warning": null
+      },
+      "note": "item_name is required. item_department and variant_name are optional but recommended for better descriptions."
+    },
+    "7_description_generate_with_hints": {
+      "url": "POST http://localhost:6002/api/description/generate",
+      "description": "Generate description with GradProject visual hints (color/material from images)",
+      "sample_input": {
+        "item_name": "Summer Dress",
+        "item_department": "Women's Clothing",
+        "variant_name": "Medium",
+        "images": ["https://example.com/dress.jpg"],
+        "shopping_category": "fashion",
+        "item_category": "dress"
+      },
+      "sample_output": {
+        "success": true,
+        "description": "This elegant red silk summer dress features a flattering silhouette perfect for warm weather occasions. The luxurious silk fabric drapes beautifully and offers a sophisticated look for any event.",
+        "grad_hints_used": true,
+        "grad_predictions": {
+          "color": { "value": "red", "confidence": 0.92 },
+          "material": { "value": "silk", "confidence": 0.85 }
+        },
+        "warning": null
+      },
+      "note": "GradProject hints are used when images + shopping_category (fashion or home and garden) are provided. The detected color and material are incorporated into the description."
+    },
+    "8_description_generate_batch": {
+      "url": "POST http://localhost:6002/api/description/generate-batch",
+      "description": "Parallel batch description generation",
+      "sample_input": {
+        "items": [
+          {
+            "item_name": "Blue Cotton T-Shirt",
+            "item_department": "Men's Clothing",
+            "variant_name": "Large"
+          },
+          {
+            "item_name": "Leather Handbag",
+            "item_department": "Accessories",
+            "variant_name": "Brown",
+            "images": ["https://example.com/bag.jpg"],
+            "shopping_category": "fashion",
+            "item_category": "bag"
+          },
+          {
+            "item_name": "Wooden Coffee Table",
+            "item_department": "Furniture",
+            "variant_name": "Oak Finish",
+            "shopping_category": "home and garden",
+            "item_category": "table"
+          }
+        ],
+        "max_workers": 3
+      },
+      "sample_output": {
+        "success": true,
+        "results": [
+          {
+            "success": true,
+            "description": "This classic blue cotton t-shirt offers comfortable everyday wear...",
+            "grad_hints_used": false,
+            "grad_predictions": null,
+            "warning": null
+          },
+          {
+            "success": true,
+            "description": "This sophisticated brown leather handbag combines style and functionality...",
+            "grad_hints_used": true,
+            "grad_predictions": {
+              "color": { "value": "brown", "confidence": 0.89 },
+              "material": { "value": "leather", "confidence": 0.94 }
+            },
+            "warning": null
+          },
+          {
+            "success": true,
+            "description": "This elegant wooden coffee table features a beautiful oak finish...",
+            "grad_hints_used": false,
+            "grad_predictions": null,
+            "warning": null
+          }
+        ],
+        "total_items": 3,
+        "successful_generations": 3,
+        "failed_generations": 0,
+        "processing_time": "00:00:05",
+        "processing_time_seconds": 5.23
+      },
+      "note": "Processes multiple items in parallel. max_workers controls parallel execution (default: 3)"
+    },
+    "9_grammar_check_single": {
       "url": "POST http://localhost:6002/api/grammar/check",
       "description": "Grammar check for single text",
       "sample_input": {
@@ -110,7 +214,7 @@
         "errors_found": 1
       }
     },
-    "7_grammar_check_batch": {
+    "10_grammar_check_batch": {
       "url": "POST http://localhost:6002/api/grammar/check",
       "description": "Grammar check for multiple texts (batch)",
       "sample_input": [
@@ -149,14 +253,14 @@
       ],
       "note": "Send an array of objects for batch processing. Each object must have a 'text' field. Uses LanguageTool locally."
     },
-    "8_translation_translate_single": {
+    "11_translation_translate_single": {
       "url": "POST http://localhost:6002/api/translation/translate",
       "description": "Translate single text to Arabic",
       "sample_input": {
         "text": "Gender: Women\nColor: Red\nMaterial: Cotton\nPattern: Floral"
       }
     },
-    "9_translation_translate_batch": {
+    "12_translation_translate_batch": {
       "url": "POST http://localhost:6002/api/translation/translate",
       "description": "Translate multiple texts to Arabic",
       "sample_input": {
@@ -168,7 +272,7 @@
         ]
       }
     },
-    "10_pipeline_process": {
+    "13_pipeline_process": {
       "url": "POST http://localhost:6002/api/pipeline/process",
       "description": "End-to-end: Classification -> Attributes -> Translation",
       "sample_input": {
@@ -181,7 +285,7 @@
       },
       "note": "Set translate=true to get Arabic translation, false to skip translation"
     },
-    "11_pipeline_process_batch": {
+    "14_pipeline_process_batch": {
       "url": "POST http://localhost:6002/api/pipeline/process-batch",
       "description": "Batch pipeline processing",
       "sample_input": {
