@@ -46,6 +46,7 @@ RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
 # AI Attributes configuration
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
+USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
 
 # Translation configuration
 AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
@@ -556,6 +557,110 @@ def predict_with_grad_model(images, description, category):
         return None, None, {"warning": f"GradProject prediction failed: {str(e)}"}
 
 
+def predict_color_material_openai(item_name, description, item_category, images=None):
+    """
+    Fallback: use OpenAI GPT-4o vision to predict color and material from product images.
+    If no images provided, falls back to text-only analysis.
+    Returns (color, material, confidence_data) where confidence_data contains confidence scores.
+    """
+    try:
+        VISION_MODEL = "gpt-4o"
+
+        prompt_text = f"""You are a product attribute extractor. Analyze the product and identify the color and material.
+
+Item Name: {item_name}
+Description: {description}
+Item Category: {item_category}
+
+Respond in EXACTLY this format (one per line, no extra text):
+color: <color>
+color_confidence: <0.0 to 1.0>
+material: <material>
+material_confidence: <0.0 to 1.0>
+
+Rules:
+- For color: identify the dominant/primary color of the product
+- For material: identify the main material (e.g. cotton, leather, plastic, wood, metal, polyester, silk, etc.)
+- Confidence: 1.0 = very certain, 0.5 = somewhat certain, below 0.3 = guessing
+- If you cannot determine a value, leave it empty after the colon and set confidence to 0.0"""
+
+        # Build messages with image content if available
+        user_content = []
+
+        if images and len(images) > 0:
+            # Add images for GPT-4o vision analysis
+            for img_url in images[:3]:  # Limit to 3 images to control costs
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": img_url, "detail": "low"}
+                })
+            print(f"[INFO] OpenAI Vision fallback - analyzing {min(len(images), 3)} image(s) with {VISION_MODEL}")
+        else:
+            print(f"[INFO] OpenAI Vision fallback - no images, using text-only with {VISION_MODEL}")
+
+        user_content.append({"type": "text", "text": prompt_text})
+
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": VISION_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a precise product attribute extractor. When images are provided, analyze them carefully to determine color and material."},
+                {"role": "user", "content": user_content}
+            ],
+            "max_tokens": 100,
+            "temperature": 0.1
+        }
+
+        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r.raise_for_status()
+        result = r.json()["choices"][0]["message"]["content"].strip()
+
+        color = None
+        material = None
+        color_confidence = 0.0
+        material_confidence = 0.0
+
+        for line in result.split('\n'):
+            line = line.strip().lower()
+            if line.startswith('color_confidence:'):
+                val = line.split(':', 1)[1].strip()
+                try:
+                    color_confidence = float(val)
+                except ValueError:
+                    color_confidence = 0.0
+            elif line.startswith('color:'):
+                val = line.split(':', 1)[1].strip()
+                if val and val not in ['none', 'unknown', 'n/a', 'empty', '']:
+                    color = val
+            elif line.startswith('material_confidence:'):
+                val = line.split(':', 1)[1].strip()
+                try:
+                    material_confidence = float(val)
+                except ValueError:
+                    material_confidence = 0.0
+            elif line.startswith('material:'):
+                val = line.split(':', 1)[1].strip()
+                if val and val not in ['none', 'unknown', 'n/a', 'empty', '']:
+                    material = val
+
+        confidence_data = {
+            "color_confidence": color_confidence,
+            "material_confidence": material_confidence,
+            "model": VISION_MODEL,
+            "images_analyzed": min(len(images), 3) if images else 0
+        }
+
+        print(f"[INFO] OpenAI Vision fallback - color: {color} (conf: {color_confidence}), material: {material} (conf: {material_confidence})")
+        return color, material, confidence_data
+
+    except Exception as e:
+        print(f"[WARNING] OpenAI Vision fallback for color/material failed: {str(e)}")
+        return None, None, {}
+
+
 def get_attribute_template(shopping_category, item_category):
     """Get template from mapping"""
     category_map = {
@@ -656,6 +761,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     grad_color = None
     grad_material = None
     grad_data = {}
+    used_fallback = False
 
     if (shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES and
         images and len(images) > 0):
@@ -666,6 +772,20 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
             description,
             item_category.lower().strip()
         )
+
+    # Step 1b: Fallback to OpenAI GPT-4o Vision if GradProject didn't produce results
+    if grad_color is None and grad_material is None:
+        if USE_OPENAI_FALLBACK:
+            print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
+            grad_color, grad_material, vision_confidence = predict_color_material_openai(
+                item_name, description, item_category, images
+            )
+            used_fallback = True
+            if grad_color or grad_material:
+                grad_data["fallback"] = "openai-gpt4o-vision"
+                grad_data["vision_confidence"] = vision_confidence
+        else:
+            print("[WARNING] GradProject unavailable or returned no results. OpenAI fallback is disabled (USE_OPENAI_FALLBACK=False).")
 
     # Step 2: Build OpenAI prompt with grad hints
     input_text = f"""Item Name: {item_name}
@@ -1235,6 +1355,66 @@ def extract_attributes_batch():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/attributes/test-vision', methods=['POST'])
+def test_vision_extraction():
+    """
+    Test endpoint for OpenAI GPT-4o Vision color/material extraction.
+    Directly tests the vision fallback without going through the full pipeline.
+
+    Input JSON:
+    {
+        "images": ["https://product-image-url.jpg"],
+        "item_name": "Product Name",
+        "description": "Product description",
+        "item_category": "bag"
+    }
+    """
+    try:
+        data = request.get_json()
+
+        images = data.get('images', [])
+        item_name = data.get('item_name', '')
+        description = data.get('description', '')
+        item_category = data.get('item_category', '')
+
+        if not images or len(images) == 0:
+            return jsonify({
+                "success": False,
+                "error": "images array is required with at least one image URL"
+            }), 400
+
+        if not OPENAI_API_KEY:
+            return jsonify({
+                "success": False,
+                "error": "OPENAI_API_KEY not configured"
+            }), 500
+
+        start_time = time.time()
+
+        color, material, confidence_data = predict_color_material_openai(
+            item_name, description, item_category, images
+        )
+
+        elapsed = time.time() - start_time
+
+        return jsonify({
+            "success": True,
+            "color": color,
+            "material": material,
+            "color_confidence": confidence_data.get("color_confidence", 0.0),
+            "material_confidence": confidence_data.get("material_confidence", 0.0),
+            "model": confidence_data.get("model", "gpt-4o"),
+            "images_analyzed": confidence_data.get("images_analyzed", 0),
+            "response_time_seconds": round(elapsed, 2)
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
 @app.route('/api/attributes/health', methods=['GET'])
@@ -1904,6 +2084,7 @@ if __name__ == '__main__':
     print("\n  AI Attributes Service:")
     print("    POST /api/attributes/extract        - Extract AI attributes")
     print("    POST /api/attributes/extract-batch  - Parallel batch AI attribute extraction")
+    print("    POST /api/attributes/test-vision    - Test GPT-4o vision color/material extraction")
 
     print("\n  Description Generation Service:")
     print("    POST /api/description/generate      - Generate item description")
