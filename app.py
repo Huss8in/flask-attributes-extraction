@@ -745,12 +745,6 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     3. Return combined attributes
     """
 
-    # Only extract for allowed categories
-    allowed_categories = ["fashion", "beauty", "home and garden"]
-    if shopping_category.lower().strip() not in allowed_categories:
-        print(f"[DEBUG] Category '{shopping_category}' not allowed")
-        return "", {}
-
     # Get template
     template = get_attribute_template(shopping_category, item_category)
     if not template:
@@ -847,17 +841,6 @@ def extract_single_item_attributes(item_data, index):
             return index, {
                 "success": False,
                 "message": "item_name, shopping_category, and item_category are required",
-                "ai_attributes": "",
-                "ai_attributes_array": [],
-                "grad_model_used": False,
-                "grad_predictions": None
-            }
-
-        allowed_categories = ["fashion", "beauty", "home and garden"]
-        if shopping_category.lower().strip() not in allowed_categories:
-            return index, {
-                "success": False,
-                "message": f"Category '{shopping_category}' not allowed. Allowed: {', '.join(allowed_categories)}",
                 "ai_attributes": "",
                 "ai_attributes_array": [],
                 "grad_model_used": False,
@@ -1262,14 +1245,6 @@ def extract_attributes():
             return jsonify({
                 "error": "item_name, shopping_category, and item_category are required"
             }), 400
-
-        allowed_categories = ["fashion", "beauty", "home and garden"]
-        if shopping_category.lower().strip() not in allowed_categories:
-            return jsonify({
-                "success": False,
-                "message": f"Category '{shopping_category}' not allowed. Allowed: {', '.join(allowed_categories)}",
-                "ai_attributes": ""
-            }), 200
 
         # Extract attributes
         attributes, grad_data = extract_ai_attributes(
@@ -1919,29 +1894,25 @@ def pipeline_process():
 
         # Step 2: AI Attributes Extraction
         ai_attributes_result = {}
-        allowed_categories = ["fashion", "beauty", "home and garden"]
 
-        if shopping_cat.lower().strip() in allowed_categories:
-            attributes, grad_data = extract_ai_attributes(
-                item_name, description, vendor_category,
-                shopping_cat, shopping_subcat, item_cat,
-                images
-            )
+        attributes, grad_data = extract_ai_attributes(
+            item_name, description, vendor_category,
+            shopping_cat, shopping_subcat, item_cat,
+            images
+        )
 
-            ai_attributes_result["english"] = attributes
-            ai_attributes_result["grad_model_used"] = bool(grad_data) and "warning" not in grad_data
-            ai_attributes_result["grad_predictions"] = grad_data if grad_data and "warning" not in grad_data else None
+        ai_attributes_result["english"] = attributes
+        ai_attributes_result["grad_model_used"] = bool(grad_data) and "warning" not in grad_data
+        ai_attributes_result["grad_predictions"] = grad_data if grad_data and "warning" not in grad_data else None
 
-            # Add warning if GradProject unavailable
-            if grad_data and "warning" in grad_data:
-                ai_attributes_result["warning"] = grad_data["warning"]
+        # Add warning if GradProject unavailable
+        if grad_data and "warning" in grad_data:
+            ai_attributes_result["warning"] = grad_data["warning"]
 
-            # Step 3: Translation (if requested)
-            if should_translate and attributes:
-                arabic_translation = translate_to_arabic(attributes)
-                ai_attributes_result["arabic"] = arabic_translation
-        else:
-            ai_attributes_result["message"] = f"Category '{shopping_cat}' not supported for AI attributes"
+        # Step 3: Translation (if requested)
+        if should_translate and attributes:
+            arabic_translation = translate_to_arabic(attributes)
+            ai_attributes_result["arabic"] = arabic_translation
 
         return jsonify({
             "success": True,
