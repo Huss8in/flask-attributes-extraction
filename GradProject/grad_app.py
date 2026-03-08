@@ -40,7 +40,10 @@ config = AutoConfig.from_pretrained(
     trust_remote_code=True,
     token=HF_TOKEN,
 )
-config.model_type = "fashion"
+DOMAIN_MAP = {
+    "fashion": "fashion",
+    "home and garden": "home and garden",
+}
 
 # ------------------------------------------------------------------
 # LOAD MODEL (GPU ONLY)
@@ -149,11 +152,14 @@ def predict():
     description = data.get("descriptions", [""])[0]
     category = data.get("categories", [""])[0]
     attributes = data.get("attributes", [])
+    domain = data.get("domain", "fashion")
 
     if not images or not description or not category or not attributes:
         return jsonify({"error": "images, description, category, attributes required"}), 400
 
-    print(f"[DEBUG] Images count: {len(images)}")
+    model_type = DOMAIN_MAP.get(domain.lower().strip(), "fashion")
+    model.config.model_type = model_type
+    print(f"[DEBUG] Images count: {len(images)}, domain: {domain}, model_type: {model_type}")
 
     with torch.inference_mode():
         results = model.generate(

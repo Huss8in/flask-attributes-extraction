@@ -481,7 +481,7 @@ def classify_single_item(item_data, index):
 # AI ATTRIBUTES SERVICE - HELPER FUNCTIONS
 # ============================================================
 
-def predict_with_grad_model(images, description, category):
+def predict_with_grad_model(images, description, category, shopping_category="fashion"):
     """Call external GradProject service to predict color and material"""
     if not images or len(images) == 0:
         return None, None, {}
@@ -504,14 +504,15 @@ def predict_with_grad_model(images, description, category):
 
         grad_category = category_singular_to_plural.get(category.lower(), category.lower())
 
-        print(f"[DEBUG] Calling external GradProject service with category: {grad_category}, {len(images)} image(s)")
+        print(f"[DEBUG] Calling external GradProject service with category: {grad_category}, domain: {shopping_category}, {len(images)} image(s)")
 
         # Make HTTP request to external GradProject service
         payload = {
             "images": images,
             "descriptions": [description],
             "categories": [grad_category],
-            "attributes": ["color", "material"]
+            "attributes": ["color", "material"],
+            "domain": shopping_category
         }
 
         response = requests.post(GRADPROJECT_API_URL, json=payload, timeout=30)
@@ -764,7 +765,8 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
         grad_color, grad_material, grad_data = predict_with_grad_model(
             images,
             description,
-            item_category.lower().strip()
+            item_category.lower().strip(),
+            shopping_category.lower().strip()
         )
 
     # Step 1b: Fallback to OpenAI GPT-4o Vision if GradProject didn't produce results
