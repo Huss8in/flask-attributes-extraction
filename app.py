@@ -770,18 +770,20 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
         )
 
     # Step 1b: Fallback to OpenAI GPT-4o Vision if GradProject didn't produce results
-    if grad_color is None and grad_material is None:
-        if USE_OPENAI_FALLBACK:
-            print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
-            grad_color, grad_material, vision_confidence = predict_color_material_openai(
-                item_name, description, item_category, images
-            )
-            used_fallback = True
-            if grad_color or grad_material:
-                grad_data["fallback"] = "openai-gpt4o-vision"
-                grad_data["vision_confidence"] = vision_confidence
-        else:
-            print("[WARNING] GradProject unavailable or returned no results. OpenAI fallback is disabled (USE_OPENAI_FALLBACK=False).")
+    # Only relevant for categories the grad model supports (fashion, home and garden)
+    if shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES:
+        if grad_color is None and grad_material is None:
+            if USE_OPENAI_FALLBACK:
+                print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
+                grad_color, grad_material, vision_confidence = predict_color_material_openai(
+                    item_name, description, item_category, images
+                )
+                used_fallback = True
+                if grad_color or grad_material:
+                    grad_data["fallback"] = "openai-gpt4o-vision"
+                    grad_data["vision_confidence"] = vision_confidence
+            else:
+                print("[WARNING] GradProject unavailable or returned no results. OpenAI fallback is disabled (USE_OPENAI_FALLBACK=False).")
 
     # Step 2: Build OpenAI prompt with grad hints
     input_text = f"""Item Name: {item_name}
@@ -791,12 +793,15 @@ Shopping Category: {shopping_category}
 Shopping Subcategory: {shopping_subcategory}
 Item Category: {item_category}"""
 
-    # Add color and material hints from grad model
+    # Add color and material hints from grad model (only for grad-supported categories)
     grad_hints = ""
+    color_material_hint = ""
     if grad_color:
         grad_hints += f"\nDetected Color (from image analysis): {grad_color}"
+        color_material_hint += "\n- Color: use the detected color from image analysis if provided above"
     if grad_material:
         grad_hints += f"\nDetected Material (from image analysis): {grad_material}"
+        color_material_hint += "\n- Material: use the detected material from image analysis if provided above"
 
     prompt = f"""
 You are a strict AI attribute extractor for e-commerce products.
@@ -811,9 +816,7 @@ INSTRUCTIONS:
 - Use concise English values
 - Gender: choose strictly from ["Women", "Men", "Unisex women, Unisex men", "Girls", "Boys", "Unisex girls, unisex boys"]
 - Generic Name: identify the main item (e.g. if "Matelda Chocolate cake 120 grams" → Generic Name: "cake")
-- Product Name: the product name without size/quantity (e.g. "Matelda Chocolate cake")
-- Color: use the detected color from image analysis if provided above
-- Material: use the detected material from image analysis if provided above
+- Product Name: the product name without size/quantity (e.g. "Matelda Chocolate cake"){color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
@@ -2002,6 +2005,188 @@ def pipeline_process_batch():
 
 
 # ============================================================
+# KEYWORDS SERVICE - HELPER FUNCTIONS
+# ============================================================
+
+COMMON_COLORS = {
+    "black", "white", "red", "blue", "green", "yellow", "orange", "purple",
+    "pink", "brown", "grey", "gray", "silver", "gold", "navy", "beige",
+    "ivory", "cream", "maroon", "violet", "teal", "cyan", "magenta", "coral",
+    "turquoise", "khaki", "olive", "indigo", "lavender", "rose", "mint",
+    "charcoal", "tan", "burgundy", "aqua", "lime", "fuchsia", "peach",
+    "multicolor", "multi-color", "multicolour", "multi-colour"
+}
+
+
+def phrase_contains_color(phrase):
+    """Return True if the phrase contains any color word."""
+    words = re.findall(r'[a-z]+', phrase.lower())
+    return bool(COMMON_COLORS.intersection(words))
+
+
+def refine_search_keywords(skw_list, dsw_list):
+    """
+    Use OpenAI to generate/refine DSW from SKW following the rules:
+    - No SKW phrases repeated in DSW
+    - Colors only in DSW, never in SKW (colored SKW phrases are moved to DSW)
+    Returns (clean_skw_list, refined_dsw_list)
+    """
+    skw_text = ", ".join(skw_list)
+    dsw_text = ", ".join(dsw_list) if dsw_list else ""
+
+    prompt = f"""You are helping generate product search keywords for an e-commerce platform.
+
+You are given:
+SKW (Search Keywords): {skw_text}
+DSW (Derived Search Words): {dsw_text}
+
+Your task: Generate a refined set of SKW and DSW following these STRICT rules:
+
+RULES:
+1. SKW must NOT contain any color words (black, red, blue, green, white, yellow, orange, purple, pink, brown, grey, gray, silver, gold, navy, beige, ivory, cream, maroon, violet, teal, cyan, magenta, coral, turquoise, khaki, olive, indigo, lavender, rose, mint, charcoal, tan, burgundy, aqua, lime, fuchsia, peach, multicolor, etc.)
+   - Any current SKW phrase that contains a color must be MOVED to DSW, not kept in SKW
+2. DSW must NOT repeat any phrase that is already in SKW (exact match, case-insensitive)
+3. Generate additional useful DSW phrases based on the SKW — include color-based variations in DSW
+4. DSW phrases should be related search variations, synonyms, or combinations
+5. Do not duplicate entries within SKW or within DSW
+
+OUTPUT FORMAT (strictly follow — no extra text, no explanations):
+SKW: <comma-separated list>
+DSW: <comma-separated list>
+"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": OPENAI_MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": "You are a strict search keyword refinement assistant. Follow instructions exactly."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.3
+        }
+
+        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r.raise_for_status()
+        result = r.json()["choices"][0]["message"]["content"].strip()
+
+        refined_skw = []
+        refined_dsw = []
+
+        for line in result.split('\n'):
+            line = line.strip()
+            if line.lower().startswith('skw:'):
+                raw = line.split(':', 1)[1].strip()
+                refined_skw = [p.strip() for p in raw.split(',') if p.strip()]
+            elif line.lower().startswith('dsw:'):
+                raw = line.split(':', 1)[1].strip()
+                refined_dsw = [p.strip() for p in raw.split(',') if p.strip()]
+
+        # Post-process: enforce color rule locally as a safety net
+        skw_set_lower = {p.lower() for p in refined_skw}
+        final_skw = []
+        overflow_to_dsw = []
+        for phrase in refined_skw:
+            if phrase_contains_color(phrase):
+                overflow_to_dsw.append(phrase)
+            else:
+                final_skw.append(phrase)
+
+        # Merge overflow into DSW, avoid duplicating existing DSW entries
+        dsw_lower = {p.lower() for p in refined_dsw}
+        for phrase in overflow_to_dsw:
+            if phrase.lower() not in dsw_lower:
+                refined_dsw.append(phrase)
+                dsw_lower.add(phrase.lower())
+
+        # Remove DSW entries that duplicate SKW
+        skw_final_lower = {p.lower() for p in final_skw}
+        final_dsw = [p for p in refined_dsw if p.lower() not in skw_final_lower]
+
+        return final_skw, final_dsw
+
+    except Exception as e:
+        print(f"[ERROR] Keyword refinement failed: {str(e)}")
+        raise
+
+
+# ============================================================
+# KEYWORDS SERVICE - ROUTES
+# ============================================================
+
+@app.route('/api/keywords/refine', methods=['POST'])
+def refine_keywords():
+    """
+    Refine product search keywords (SKW / DSW).
+
+    Input JSON:
+    {
+        "skw": "notebook, spiral hardcover notebook, black hard cover notebook",
+        "dsw": "hard cover spiral notebook, spiral notebook"   // optional
+    }
+
+    SKW and DSW can be either a comma-separated string or a list of strings.
+
+    Rules enforced:
+    - Colors must not appear in SKW (colored phrases are moved to DSW)
+    - DSW must not repeat any phrase already in SKW
+    - Additional relevant DSW phrases are generated via AI
+
+    Returns:
+    {
+        "success": true,
+        "skw": ["notebook", "spiral hardcover notebook", ...],
+        "dsw": ["black hard cover notebook", "spiral bound notebook", ...],
+        "skw_string": "notebook, spiral hardcover notebook, ...",
+        "dsw_string": "black hard cover notebook, spiral bound notebook, ..."
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        raw_skw = data.get('skw', '')
+        raw_dsw = data.get('dsw', '')
+
+        # Normalise input — accept both string and list
+        if isinstance(raw_skw, list):
+            skw_list = [p.strip() for p in raw_skw if str(p).strip()]
+        else:
+            skw_list = [p.strip() for p in str(raw_skw).split(',') if p.strip()]
+
+        if isinstance(raw_dsw, list):
+            dsw_list = [p.strip() for p in raw_dsw if str(p).strip()]
+        else:
+            dsw_list = [p.strip() for p in str(raw_dsw).split(',') if p.strip()]
+
+        if not skw_list:
+            return jsonify({"success": False, "error": "skw is required and cannot be empty"}), 400
+
+        if not OPENAI_API_KEY:
+            return jsonify({"success": False, "error": "OpenAI API key not configured"}), 500
+
+        print(f"[Keywords] Refining {len(skw_list)} SKW and {len(dsw_list)} DSW phrases...")
+        refined_skw, refined_dsw = refine_search_keywords(skw_list, dsw_list)
+
+        return jsonify({
+            "success": True,
+            "skw": refined_skw,
+            "dsw": refined_dsw,
+            "skw_string": ", ".join(refined_skw),
+            "dsw_string": ", ".join(refined_dsw)
+        }), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
 # GLOBAL HEALTH ENDPOINT
 # ============================================================
 
@@ -2018,7 +2203,7 @@ def global_health():
 
     return jsonify({
         "status": "healthy",
-        "services": ["category", "ai_attributes", "description", "grammar", "translation", "pipeline"],
+        "services": ["category", "ai_attributes", "description", "grammar", "translation", "pipeline", "keywords"],
         "models": {
             "openai": bool(OPENAI_API_KEY),
             "gradproject_service": gradproject_available,
@@ -2072,6 +2257,9 @@ if __name__ == '__main__':
     print("\n  Pipeline Service:")
     print("    POST /api/pipeline/process          - End-to-end processing")
     print("    POST /api/pipeline/process-batch    - Batch pipeline processing")
+
+    print("\n  Keywords Service:")
+    print("    POST /api/keywords/refine           - Refine SKW / DSW search keywords")
 
     print("\n  Global:")
     print("    GET  /health                        - Global health check")
