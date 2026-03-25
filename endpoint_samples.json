@@ -47,7 +47,7 @@
     },
     "4_attributes_extract": {
       "url": "POST http://localhost:6002/api/attributes/extract",
-      "description": "Extract AI attributes",
+      "description": "Extract AI attributes for a single item",
       "sample_input": {
         "item_name": "Women's Red Cotton Dress",
         "description": "Elegant summer dress with floral pattern",
@@ -57,7 +57,7 @@
         "item_category": "dress",
         "images": []
       },
-      "note": "Categories must be from classification result. Images are optional (paths to image files)"
+      "note": "For fashion: item_category must match the fashion mapping keys (e.g. top, dress, trousers, shoe, bag). For home and garden / beauty: the template is looked up by shopping_subcategory (e.g. drinkware, tableware, skincare). Images are optional URL strings."
     },
     "5_attributes_extract_batch": {
       "url": "POST http://localhost:6002/api/attributes/extract-batch",
@@ -74,12 +74,21 @@
             "images": []
           },
           {
-            "item_name": "Men's Blue Jeans",
-            "description": "Classic denim jeans",
+            "item_name": "Men's Classic Denim Jeans",
+            "description": "Straight-fit classic denim jeans in dark blue wash",
             "vendor_category": "fashion",
             "shopping_category": "fashion",
             "shopping_subcategory": "casual wear",
-            "item_category": "pant",
+            "item_category": "trousers",
+            "images": []
+          },
+          {
+            "item_name": "Abstract Blonde Mug",
+            "description": "Multi-colored shimmering mug fusing abstract art with metallic luster. Base of yellowish-beige glazing with random infused shades of yellow, blue, green, metallic red and gold.",
+            "vendor_category": "",
+            "shopping_category": "home and garden",
+            "shopping_subcategory": "drinkware",
+            "item_category": "mug",
             "images": []
           },
           {
@@ -94,7 +103,7 @@
         ],
         "max_workers": 3
       },
-      "note": "Processes multiple items in parallel. Use categories from classification results. max_workers controls parallel execution (default: 3)"
+      "note": "Template lookup is category-aware: fashion uses item_category, home and garden and beauty use shopping_subcategory. All template fields are always returned — empty string for attributes the model could not infer."
     },
     "6_description_generate": {
       "url": "POST http://localhost:6002/api/description/generate",
@@ -261,14 +270,14 @@
       "url": "POST http://localhost:6002/api/pipeline/process",
       "description": "End-to-end: Classification -> Attributes -> Translation",
       "sample_input": {
-        "item_name": "Adidas Blue Running Shoes",
-        "description": "Lightweight running shoes for men",
-        "item_department": "Footwear",
-        "vendor_category": "fashion",
+        "item_name": "Abstract Blonde Mug",
+        "description": "Multi-colored shimmering mug fusing abstract art with metallic luster. Base of yellowish-beige glazing with random infused shades of yellow, blue, green, metallic red and gold.",
+        "item_department": "",
+        "vendor_category": "",
         "images": [],
         "translate": true
       },
-      "note": "Set translate=true to get Arabic translation, false to skip translation"
+      "note": "Set translate=true to get Arabic translation, false to skip. Classification runs automatically — no need to pass shopping_category or item_category."
     },
     "14_pipeline_process_batch": {
       "url": "POST http://localhost:6002/api/pipeline/process-batch",
@@ -276,8 +285,8 @@
       "sample_input": {
         "items": [
           {
-            "item_name": "Red Dress",
-            "description": "Summer dress",
+            "item_name": "It Girl Top in Beige",
+            "description": "Party wear top for the it-girl",
             "vendor_category": "fashion",
             "images": []
           },
