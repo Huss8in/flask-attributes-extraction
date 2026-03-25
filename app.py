@@ -662,22 +662,52 @@ Rules:
         return None, None, {}
 
 
-def get_attribute_template(shopping_category, item_category):
-    """Get template from mapping"""
+_HOME_GARDEN_SUBCAT_NORMALIZE = {
+    "kitchenwear": "kitchenware",
+    "household products": "household products / Home Scent",
+    "storage and organization": "storage & organization",
+    "bed and bath": "bed & bath",
+    "gardening and outdoor": "gardening & outdoor",
+    "hardware and home improvement": "hardware & home improvement",
+}
+
+# Defines which field is used to look up the attribute template for each category.
+# fashion: mapping keys are item types (top, dress, shoe, ...) → use item_category
+# home_and_garden / beauty: mapping keys are subcategory names → use shopping_subcategory
+_TEMPLATE_LOOKUP_FIELD = {
+    "fashion": "item_category",
+    "beauty": "shopping_subcategory",
+    "home_and_garden": "shopping_subcategory",
+}
+
+
+def get_attribute_template(shopping_category, item_category, shopping_subcategory=""):
+    """Get attribute template from mapping.
+
+    The lookup key is chosen per-category via _TEMPLATE_LOOKUP_FIELD, so adding a new
+    category only requires registering its mapping and its lookup field there.
+    """
     category_map = {
         "fashion": "fashion",
         "beauty": "beauty",
-        "home and garden": "home_and_garden"
+        "home and garden": "home_and_garden",
     }
 
     category_key = category_map.get(shopping_category.lower().strip())
 
-    if category_key in category_mapping:
-        item_cat_lower = item_category.lower().strip()
-        if item_cat_lower in category_mapping[category_key]:
-            return category_mapping[category_key][item_cat_lower][0]
+    if category_key not in category_mapping:
+        return None
 
-    return None
+    mapping = category_mapping[category_key]
+    lookup_field = _TEMPLATE_LOOKUP_FIELD.get(category_key, "item_category")
+
+    if lookup_field == "item_category":
+        lookup_key = item_category.lower().strip()
+    else:
+        lookup_key = shopping_subcategory.lower().strip()
+        lookup_key = _HOME_GARDEN_SUBCAT_NORMALIZE.get(lookup_key, lookup_key)
+
+    return mapping[lookup_key][0] if lookup_key in mapping else None
 
 
 def run_openai_model(prompt):
@@ -737,6 +767,34 @@ def run_openai_model(prompt):
         raise
 
 
+def merge_with_template(template, model_output):
+    """Reconstruct output using the template's attribute order.
+
+    Any attribute the model skipped or left out is included with an empty value,
+    ensuring the full template structure is always returned.
+    """
+    # Build a lookup from lowercased attribute name → value from model output
+    model_values = {}
+    for line in model_output.split('\n'):
+        line = line.strip()
+        if ':' in line:
+            name, _, value = line.partition(':')
+            model_values[name.strip().lower()] = value.strip()
+
+    # Rebuild in template order, filling missing attrs with empty string
+    result_lines = []
+    for line in template.split('\n'):
+        line = line.strip()
+        if not line or ':' not in line:
+            continue
+        name, _, _ = line.partition(':')
+        attr_name = name.strip()
+        value = model_values.get(attr_name.lower(), '')
+        result_lines.append(f"{attr_name}: {value}" if value else f"{attr_name}:")
+
+    return '\n'.join(result_lines)
+
+
 def extract_ai_attributes(item_name, description, vendor_category, shopping_category,
                          shopping_subcategory, item_category, images=None):
     """
@@ -747,7 +805,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     """
 
     # Get template
-    template = get_attribute_template(shopping_category, item_category)
+    template = get_attribute_template(shopping_category, item_category, shopping_subcategory)
     if not template:
         print(f"[DEBUG] No template found for {shopping_category}/{item_category}")
         return "", {}
@@ -828,6 +886,7 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
 """
 
     result = run_openai_model(prompt)
+    result = merge_with_template(template, result)
     return result, grad_data
 
 
