@@ -672,34 +672,72 @@ _HOME_GARDEN_SUBCAT_NORMALIZE = {
 }
 
 # Defines which field is used to look up the attribute template for each category.
-# fashion: mapping keys are item types (top, dress, shoe, ...) → use item_category
-# home_and_garden / beauty: mapping keys are subcategory names → use shopping_subcategory
+# fashion / electronics / pet_care: mapping keys are item types → use item_category
+# all other categories: mapping keys are subcategory names → use shopping_subcategory
 _TEMPLATE_LOOKUP_FIELD = {
-    "fashion": "item_category",
+    "fashion": "item_category",  # (item_category)
+    "electronics": "item_category", # (item_category)
+    "pet_care": "item_category", # (item_category)
+    
     "beauty": "shopping_subcategory",
     "home_and_garden": "shopping_subcategory",
+    "kids": "shopping_subcategory",
+    "sports": "shopping_subcategory",
+    "flowers_and_gifts": "shopping_subcategory",
+    "stationary": "shopping_subcategory",
+    "automotive": "shopping_subcategory",
+    "groceries": "shopping_subcategory",
+    "health_and_nutrition": "shopping_subcategory",
+    "pharmacies": "shopping_subcategory",
+    "entertainment": "shopping_subcategory",
+}
+
+# Normalizes the raw shopping_category string to the key used in category_mapping.
+_CATEGORY_KEY_MAP = {
+    "fashion": "fashion",
+    "beauty": "beauty",
+    
+    "home and garden": "home_and_garden",
+    "home_and_garden": "home_and_garden",
+    
+    "kids": "kids",
+    "sports": "sports",
+    
+    "flowers and gifts": "flowers_and_gifts",
+    "flowers_and_gifts": "flowers_and_gifts",
+    
+    "stationary": "stationary",
+    "stationery": "stationary",
+    
+    "automotive": "automotive",
+    "groceries": "groceries",
+    
+    "pet care": "pet_care",
+    "pet_care": "pet_care",
+    
+    "health and nutrition": "health_and_nutrition",
+    "health_and_nutrition": "health_and_nutrition",
+    
+    "pharmacies": "pharmacies",
+    "electronics": "electronics",
+    "entertainment": "entertainment",
 }
 
 
 def get_attribute_template(shopping_category, item_category, shopping_subcategory=""):
     """Get attribute template from mapping.
 
-    The lookup key is chosen per-category via _TEMPLATE_LOOKUP_FIELD, so adding a new
-    category only requires registering its mapping and its lookup field there.
+    The lookup key is chosen per-category via _TEMPLATE_LOOKUP_FIELD:
+    - fashion, electronics, pet_care → item_category
+    - all other categories            → shopping_subcategory
     """
-    category_map = {
-        "fashion": "fashion",
-        "beauty": "beauty",
-        "home and garden": "home_and_garden",
-    }
-
-    category_key = category_map.get(shopping_category.lower().strip())
+    category_key = _CATEGORY_KEY_MAP.get(shopping_category.lower().strip())
 
     if category_key not in category_mapping:
         return None
 
     mapping = category_mapping[category_key]
-    lookup_field = _TEMPLATE_LOOKUP_FIELD.get(category_key, "item_category")
+    lookup_field = _TEMPLATE_LOOKUP_FIELD.get(category_key, "shopping_subcategory")
 
     if lookup_field == "item_category":
         lookup_key = item_category.lower().strip()
@@ -707,7 +745,9 @@ def get_attribute_template(shopping_category, item_category, shopping_subcategor
         lookup_key = shopping_subcategory.lower().strip()
         lookup_key = _HOME_GARDEN_SUBCAT_NORMALIZE.get(lookup_key, lookup_key)
 
-    return mapping[lookup_key][0] if lookup_key in mapping else None
+    # Case-insensitive match
+    mapping_lower = {k.lower(): v for k, v in mapping.items()}
+    return mapping_lower[lookup_key][0] if lookup_key in mapping_lower else None
 
 
 def run_openai_model(prompt):

@@ -91,6 +91,28 @@ curl http://localhost:6002/health
 
 For detailed examples, see [ENDPOINT_SAMPLES.md](ENDPOINT_SAMPLES.md)
 
+## Supported Categories
+
+The AI Attributes Extraction supports the following product categories:
+
+| Category | Notes |
+|----------|-------|
+| Fashion | Clothing, apparel, and accessories |
+| Home and Garden | Furniture, decor, gardening supplies |
+| Beauty | Skincare, makeup, personal care |
+| Pharmacies | Medications, health products |
+| Restaurants | Food and dining |
+| Groceries | Food items and household supplies |
+| Kids | Children's products and toys |
+| Stationary | Office and school supplies |
+| Pet Care | Pet food, accessories, and care |
+| Sports | Sporting goods and fitness equipment |
+| Entertainment | Games, media, and leisure products |
+| Health and Nutrition | Supplements and wellness products |
+| Electronics | Devices, gadgets, and accessories |
+| Flowers and Gifts | Floral arrangements and gift items |
+| Automotive | Car parts, accessories, and supplies |
+
 ## How It Works
 
 ```
