@@ -420,7 +420,7 @@ def calculate_confidence(vendor_category, shopping_category, item_category=""):
         return "low"
 
 
-def classify_single_item(item_data, index):
+def classify_single_item(item_data, index, shopping_category_override=None):
     """Classify a single item - used for parallel processing"""
     try:
         item_name = item_data.get('item_name', '')
@@ -437,7 +437,10 @@ def classify_single_item(item_data, index):
                 ("confidence", "low")
             ])
 
-        shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
+        if shopping_category_override and shopping_category_override.lower().strip() in shoppingCategory:
+            shopping_cat = shopping_category_override.lower().strip()
+        else:
+            shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
         shopping_subcat = classify_shopping_subcategory(
             shopping_cat, item_name, description, item_department, vendor_category
         )
@@ -1042,12 +1045,17 @@ def classify_single():
         description = data.get('description', '')
         item_department = data.get('item_department', '')
         vendor_category = data.get('vendor_category', '')
+        shopping_category_override = data.get('shopping_category_override', '')
 
         if not item_name:
             return jsonify({"error": "item_name is required"}), 400
 
         # Step 1: Shopping Category
-        shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
+        override_clean = shopping_category_override.lower().strip() if shopping_category_override else ''
+        if override_clean and override_clean in shoppingCategory:
+            shopping_cat = override_clean
+        else:
+            shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
         if not shopping_cat:
             return jsonify({"error": "shopping_category classification failed - this is a mandatory field"}), 400
 
@@ -1102,6 +1110,10 @@ def classify_csv():
             return jsonify({"error": "csv_path is required in JSON body"}), 400
 
         csv_path = data.get('csv_path', '').strip()
+        shopping_category_override = data.get('shopping_category_override', '')
+        csv_override_clean = shopping_category_override.lower().strip() if shopping_category_override else ''
+        if csv_override_clean and csv_override_clean not in shoppingCategory:
+            csv_override_clean = ''
 
         if not csv_path:
             return jsonify({"error": "csv_path cannot be empty"}), 400
@@ -1182,7 +1194,10 @@ def classify_csv():
             stats['rows_with_item_name'] += 1
 
             # Classify
-            shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
+            if csv_override_clean:
+                shopping_cat = csv_override_clean
+            else:
+                shopping_cat = classify_shopping_category(item_name, description, item_department, vendor_category)
             df.at[idx, 'shopping_category'] = shopping_cat
 
             if not shopping_cat:
@@ -1279,6 +1294,10 @@ def classify_batch():
 
         items = data.get('items', [])
         max_workers = data.get('max_workers', 3)
+        shopping_category_override = data.get('shopping_category_override', '')
+        override_clean = shopping_category_override.lower().strip() if shopping_category_override else ''
+        if override_clean and override_clean not in shoppingCategory:
+            override_clean = ''
 
         if not isinstance(items, list):
             return jsonify({"error": "items must be an array"}), 400
@@ -1288,12 +1307,14 @@ def classify_batch():
 
         total_items = len(items)
         print(f"\n[Batch Parallel] Processing {total_items} items with {max_workers} workers...")
+        if override_clean:
+            print(f"[Batch Parallel] shopping_category_override='{override_clean}' — skipping AI classification for shopping category")
 
         results = [None] * total_items
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_index = {
-                executor.submit(classify_single_item, item, idx): idx
+                executor.submit(classify_single_item, item, idx, override_clean or None): idx
                 for idx, item in enumerate(items)
             }
 
