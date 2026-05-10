@@ -59,6 +59,9 @@ from mapping import *
 # Import AI attributes mapping
 from ai_att_mapping import category_mapping
 
+# Import standardization mapping
+from standardization_mapping import standardization_map
+
 # ============================================================
 # FLASK APP INITIALIZATION
 # ============================================================
@@ -1602,6 +1605,289 @@ def attributes_health():
 
 
 # ============================================================
+# STANDARDIZATION SERVICE - HELPER FUNCTIONS
+# ============================================================
+
+def _attr_key(name):
+    """Normalize a display attribute name to a standardization_map key.
+    e.g. 'Fashion Type' → 'fashion_type', 'Color' → 'color'
+    """
+    return name.strip().lower().replace(' ', '_').replace('-', '_')
+
+
+def standardize_ai_attributes(ai_attributes_input):
+    """
+    Standardize AI attribute values against the standardization_map.
+
+    ai_attributes_input: str (newline-separated "Key: Value") or list of such strings.
+    Returns (standardized_str, standardized_array, changes_list).
+    """
+    # Normalize input to a list of raw lines
+    if isinstance(ai_attributes_input, list):
+        raw_lines = ai_attributes_input
+    else:
+        raw_lines = str(ai_attributes_input).split('\n')
+
+    # Parse into (display_name, value) pairs; value=None means no colon found
+    parsed = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        if ':' not in line:
+            parsed.append((line, None))
+        else:
+            name, _, value = line.partition(':')
+            parsed.append((name.strip(), value.strip()))
+
+    # Identify which attributes have a standardization mapping and a non-empty value
+    to_standardize = []  # (display_name, raw_value, allowed_list)
+    for display_name, value in parsed:
+        if value is None or value == '':
+            continue
+        key = _attr_key(display_name)
+        if key in standardization_map:
+            to_standardize.append((display_name, value, standardization_map[key]))
+
+    # If nothing to standardize, return input unchanged
+    if not to_standardize:
+        result_lines = [
+            f"{n}: {v}" if v is not None else n
+            for n, v in parsed
+        ]
+        return '\n'.join(result_lines), result_lines, []
+
+    # Build a single prompt for all attributes that need standardization
+    attr_sections = '\n'.join(
+        f'- {name}: "{value}"\n  Allowed values: {allowed}'
+        for name, value, allowed in to_standardize
+    )
+
+    prompt = f"""You are a strict attribute standardization bot for e-commerce products.
+For each attribute below, map the raw value to the BEST MATCH from its allowed list.
+DO NOT explain. Return exactly one line per attribute in the format: AttributeName: StandardizedValue
+
+RULES:
+- Choose the closest semantic match from the allowed list.
+- If the value already matches one entry (case-insensitive), return it in the exact casing shown in the allowed list.
+- If no reasonable match exists, return the original value unchanged.
+- NEVER return a value that is not in the allowed list (unless using the original fallback).
+
+Attributes to standardize:
+{attr_sections}
+
+Output (one line per attribute, same order as above):"""
+
+    raw_output = run_openai_model(prompt)
+
+    # Parse model output into a name→value dict (case-insensitive keys)
+    model_values = {}
+    for line in raw_output.split('\n'):
+        line = line.strip()
+        if ':' in line:
+            n, _, v = line.partition(':')
+            model_values[n.strip().lower()] = v.strip()
+
+    # Validate each standardized value against its allowed list
+    standardized_lookup = {}  # display_name.lower() → final value
+    changes = []
+
+    for display_name, original_value, allowed in to_standardize:
+        allowed_lower = {v.lower(): v for v in allowed}
+        raw_std = model_values.get(display_name.lower(), original_value)
+
+        if raw_std.lower() in allowed_lower:
+            final_value = allowed_lower[raw_std.lower()]  # enforce exact casing from mapping
+        else:
+            final_value = original_value  # fallback: keep original
+
+        standardized_lookup[display_name.lower()] = final_value
+
+        if final_value.lower() != original_value.lower():
+            changes.append({
+                "attribute": display_name,
+                "original": original_value,
+                "standardized": final_value
+            })
+
+    # Rebuild output lines in original order
+    result_lines = []
+    for display_name, value in parsed:
+        if value is None:
+            result_lines.append(display_name)
+        elif value == '':
+            result_lines.append(f"{display_name}:")
+        else:
+            final = standardized_lookup.get(display_name.lower(), value)
+            result_lines.append(f"{display_name}: {final}")
+
+    result_str = '\n'.join(result_lines)
+    return result_str, result_lines, changes
+
+
+def _standardize_single(item_data, index):
+    """Standardize attributes for one item — used for parallel batch processing."""
+    try:
+        ai_attributes = item_data.get('ai_attributes', '')
+        ai_attributes_array = item_data.get('ai_attributes_array', [])
+
+        input_data = ai_attributes_array if ai_attributes_array else ai_attributes
+        if not input_data:
+            return index, {
+                "success": False,
+                "message": "ai_attributes or ai_attributes_array is required",
+                "standardized_attributes": "",
+                "standardized_attributes_array": [],
+                "changes": []
+            }
+
+        std_str, std_array, changes = standardize_ai_attributes(input_data)
+        return index, {
+            "success": True,
+            "standardized_attributes": std_str,
+            "standardized_attributes_array": std_array,
+            "changes": changes,
+            "changes_count": len(changes)
+        }
+    except Exception as e:
+        return index, {
+            "success": False,
+            "message": str(e),
+            "standardized_attributes": "",
+            "standardized_attributes_array": [],
+            "changes": []
+        }
+
+
+# ============================================================
+# STANDARDIZATION SERVICE - ROUTES
+# ============================================================
+
+@app.route('/api/attributes/standardize', methods=['POST'])
+def standardize_attributes():
+    """
+    Standardize AI attribute values using the standardization mapping.
+
+    Input JSON:
+    {
+        "ai_attributes": "Color: Navy Blue\\nSize: X-Large\\nGender: Female",
+        // OR
+        "ai_attributes_array": ["Color: Navy Blue", "Size: X-Large", "Gender: Female"]
+    }
+
+    Returns:
+    {
+        "success": true,
+        "standardized_attributes": "Color: Dark Blue\\nSize: XL\\nGender: Women",
+        "standardized_attributes_array": ["Color: Dark Blue", "Size: XL", "Gender: Women"],
+        "changes": [
+            {"attribute": "Color", "original": "Navy Blue", "standardized": "Dark Blue"},
+            {"attribute": "Size", "original": "X-Large", "standardized": "XL"},
+            {"attribute": "Gender", "original": "Female", "standardized": "Women"}
+        ],
+        "changes_count": 3
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        ai_attributes = data.get('ai_attributes', '')
+        ai_attributes_array = data.get('ai_attributes_array', [])
+
+        input_data = ai_attributes_array if ai_attributes_array else ai_attributes
+        if not input_data:
+            return jsonify({"error": "ai_attributes or ai_attributes_array is required"}), 400
+
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OpenAI API key not configured"}), 500
+
+        std_str, std_array, changes = standardize_ai_attributes(input_data)
+
+        return jsonify({
+            "success": True,
+            "standardized_attributes": std_str,
+            "standardized_attributes_array": std_array,
+            "changes": changes,
+            "changes_count": len(changes)
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/attributes/standardize-batch', methods=['POST'])
+def standardize_attributes_batch():
+    """
+    Standardize AI attributes for multiple items in parallel.
+
+    Input JSON:
+    {
+        "items": [
+            {"ai_attributes": "Color: Navy Blue\\nSize: X-Large"},
+            {"ai_attributes_array": ["Color: Red", "Size: Small"]}
+        ],
+        "max_workers": 3
+    }
+    """
+    try:
+        start_time = time.time()
+        data = request.get_json()
+
+        if not data or 'items' not in data:
+            return jsonify({"error": "items array is required"}), 400
+
+        items = data.get('items', [])
+        max_workers = data.get('max_workers', 3)
+
+        if not isinstance(items, list) or len(items) == 0:
+            return jsonify({"error": "items must be a non-empty array"}), 400
+
+        if not OPENAI_API_KEY:
+            return jsonify({"error": "OpenAI API key not configured"}), 500
+
+        total_items = len(items)
+        print(f"\n[Batch Standardization] Processing {total_items} items with {max_workers} workers...")
+
+        results = [None] * total_items
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(_standardize_single, item, idx): idx
+                for idx, item in enumerate(items)
+            }
+            for future in as_completed(future_to_index):
+                index, result = future.result()
+                results[index] = result
+
+        successful = sum(1 for r in results if r.get('success', False))
+        failed = total_items - successful
+
+        elapsed = time.time() - start_time
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        print(f"[Batch Standardization] Completed {total_items} items in {time_formatted}")
+        print(f"[Batch Standardization] Success: {successful}/{total_items} | Failed: {failed}/{total_items}")
+
+        return jsonify({
+            "success": True,
+            "results": results,
+            "total_items": total_items,
+            "successful_standardizations": successful,
+            "failed_standardizations": failed,
+            "processing_time": time_formatted,
+            "processing_time_seconds": round(elapsed, 2)
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # DESCRIPTION GENERATION SERVICE - HELPER FUNCTIONS
 # ============================================================
 
@@ -2389,7 +2675,7 @@ def global_health():
 
     return jsonify({
         "status": "healthy",
-        "services": ["category", "ai_attributes", "description", "grammar", "translation", "pipeline", "keywords"],
+        "services": ["category", "ai_attributes", "standardization", "description", "grammar", "translation", "pipeline", "keywords"],
         "models": {
             "openai": bool(OPENAI_API_KEY),
             "gradproject_service": gradproject_available,
@@ -2429,6 +2715,8 @@ if __name__ == '__main__':
     print("    POST /api/attributes/extract        - Extract AI attributes")
     print("    POST /api/attributes/extract-batch  - Parallel batch AI attribute extraction")
     print("    POST /api/attributes/test-vision    - Test GPT-4o vision color/material extraction")
+    print("    POST /api/attributes/standardize    - Standardize AI attribute values")
+    print("    POST /api/attributes/standardize-batch - Parallel batch standardization")
 
     print("\n  Description Generation Service:")
     print("    POST /api/description/generate      - Generate item description")
