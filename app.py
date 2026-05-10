@@ -151,29 +151,49 @@ def run_model(prompt):
 
 
 def classify_shopping_category(item_name, description, item_department, vendor_category):
-    prompt = f"""
+    desc_note = description.strip() if description and description.strip() else "[not provided]"
+    dept_note = item_department.strip() if item_department and item_department.strip() else "[not provided]"
+    vcat_note = vendor_category.strip() if vendor_category and vendor_category.strip() else "[not provided]"
 
-    You are a strict classification bot.
-    Your ONLY job is to return ONE shopping category.
+    prompt = f"""You are a strict classification bot.
+Your ONLY job is to return ONE shopping category from the allowed list.
+DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
 
-    DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
+Item: {item_name}
+Description: {desc_note}
+Item Department: {dept_note}
+Vendor Category: {vcat_note}
 
-    Item: {item_name}
-    Description: {description}
-    Item Department: {item_department}
-    Vendor Category: {vendor_category}
+Allowed categories:
+{shoppingCategory}
 
-    Allowed categories:
-    {shoppingCategory}
+DISAMBIGUATION RULES — read carefully before choosing:
+- Any product intended for animals/pets (shampoo, food, toys, supplements, accessories, leashes, litter) → "pet care", NOT "pharmacy", "beauty", or "health and nutrition"
+- Ready-to-eat meals, restaurant dishes, takeaway food, cafe drinks → "restaurants", NOT "groceries"
+- Packaged/raw food, supermarket goods, household food items, cooking ingredients → "groceries", NOT "restaurants"
+- Human skincare, makeup, haircare, perfume, cosmetics → "beauty", NOT "pharmacies"
+- Medicine, prescription drugs, medical devices, wound care, incontinence products → "pharmacies", NOT "beauty" or "health and nutrition"
+- Human vitamins, protein powder, dietary supplements, sports nutrition → "health and nutrition", NOT "pharmacies"
+- Baby/toddler clothing → "fashion", NOT "kids"
+- Baby furniture, strollers, baby monitors, toys, baby care products → "kids", NOT "fashion"
+- If Description and Vendor Category are both [not provided], rely on the item name alone and choose the most specific match.
 
-    Return ONLY the category name, nothing else.
-    Example valid outputs:
-    fashion
-    electronics
-    groceries
+EXAMPLES:
+Item: Pet Shampoo → pet care
+Item: Dog Supplements → pet care
+Item: Cat Food → pet care
+Item: Grilled Chicken Meal → restaurants
+Item: Raw Chicken Breast → groceries
+Item: Pasta (uncooked, packaged) → groceries
+Item: Vitamin C Tablets (for humans) → health and nutrition
+Item: Amoxicillin / Paracetamol → pharmacies
+Item: Baby Diaper → pharmacies
+Item: Face Cream / Lipstick / Mascara → beauty
+Item: Baby Dress → fashion
+Item: Baby Stroller → kids
 
-    Now output ONLY the category name:
-    """
+Return ONLY the category name, nothing else.
+Now output ONLY the category name:"""
 
     result = run_model(prompt)
     print("=============================================")
@@ -198,6 +218,10 @@ def classify_shopping_subcategory(shopping_category, item_name, description, ite
 
     subcategory_list = shoppingSubcategory_map[shopping_category]
 
+    desc_note = description.strip() if description and description.strip() else "[not provided]"
+    dept_note = item_department.strip() if item_department and item_department.strip() else "[not provided]"
+    vcat_note = vendor_category.strip() if vendor_category and vendor_category.strip() else "[not provided]"
+
     # Special handling for stationary category
     if shopping_category == "stationary":
         item_category_mapping = ""
@@ -205,59 +229,90 @@ def classify_shopping_subcategory(shopping_category, item_name, description, ite
             for subcat, items in itemCategory_map[shopping_category].items():
                 item_category_mapping += f"\n        - {subcat}: {', '.join(items)}"
 
-        prompt = f"""
-        You are a strict classification bot.
-        Your ONLY job is to return ONE shopping subcategory.
-        DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
+        prompt = f"""You are a strict classification bot.
+Your ONLY job is to return ONE shopping subcategory.
+DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
 
-        Item: {item_name}
-        Description: {description}
-        Item Department: {item_department}
-        Vendor Category: {vendor_category}
-        Shopping Category: {shopping_category}
+Item: {item_name}
+Description: {desc_note}
+Item Department: {dept_note}
+Vendor Category: {vcat_note}
+Shopping Category: {shopping_category}
 
-        Allowed subcategories:
-        {subcategory_list}
+Allowed subcategories:
+{subcategory_list}
 
-        IMPORTANT MAPPING GUIDANCE FOR STATIONARY ITEMS:
-        Use the item type to determine the correct subcategory:
-        {item_category_mapping}
+IMPORTANT MAPPING GUIDANCE FOR STATIONARY ITEMS:
+Use the item type to determine the correct subcategory:
+{item_category_mapping}
 
-        Match the item to its subcategory based on what type of item it is.
+Match the item to its subcategory based on what type of item it is.
 
-        Return ONLY the subcategory name, nothing else.
+Return ONLY the subcategory name, nothing else.
+Example valid outputs:
+stationary supplies
+office supplies
+arts and crafts
 
-        Example valid outputs:
-        stationary supplies
-        office supplies
-        arts and crafts
-
-        Now output ONLY the subcategory name:
-        """
+Now output ONLY the subcategory name:"""
     else:
-        prompt = f"""
-        You are a strict classification bot.
-        Your ONLY job is to return ONE shopping subcategory.
-        DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
+        # Build category-specific disambiguation hints
+        disambiguation = ""
+        if shopping_category == "pharmacies":
+            disambiguation = """
+DISAMBIGUATION: Within pharmacies subcategories:
+- Products marketed for women's hygiene, menstrual care → "women's care"
+- Products for men's hygiene or men-specific health → "men's care"
+- Contact lenses, eye drops, eyeglasses accessories → "eye care"
+- Toothbrush, toothpaste, mouthwash, dental floss → "dental care"
+- Adult diapers, incontinence pads → "incontinence"
+- Prescription drugs, OTC medicine, pain relief, fever → "medicine"
+- Bandages, antiseptics, blood pressure monitors, thermometers → "first aid and medical equipment"
+"""
+        elif shopping_category == "fashion":
+            disambiguation = """
+DISAMBIGUATION: Within fashion subcategories:
+- Everyday clothing (t-shirts, jeans, dresses) → "casual wear"
+- Sports clothing (tracksuits, leggings, jerseys) → "sportswear"
+- Shoes, sandals, boots, slippers → "footwear"
+- Rings, necklaces, earrings, bracelets → "jewelry"
+- Sunglasses, eyeglasses frames → "eyewear"
+- Belts, bags, wallets, hats, scarves → "accessories"
+- Bras, underwear, boxers → "undergarments"
+- Pajamas, nightgowns → "sleepwear"
+- Baby/toddler clothing → still classify under the relevant fashion subcategory (e.g. casual wear, baby clothes)
+"""
+        elif shopping_category == "health and nutrition":
+            disambiguation = """
+DISAMBIGUATION: Within health and nutrition subcategories:
+- Vitamin A/C/D/B12/multivitamins → "vitamins"
+- Whey protein, casein, plant protein → "protein products"
+- Pre-workout, creatine, BCAAs, post-workout → "preformance supplements"
+- General supplements not fitting above → "dietary supplements"
+- Herbal remedies, natural oils, plant extracts → "natural solutions"
+- Weight loss pills, fat burners, meal replacements → "weight management"
+"""
 
-        Item: {item_name}
-        Description: {description}
-        Item Department: {item_department}
-        Vendor Category: {vendor_category}
-        Shopping Category: {shopping_category}
+        prompt = f"""You are a strict classification bot.
+Your ONLY job is to return ONE shopping subcategory.
+DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
 
-        Allowed subcategories:
-        {subcategory_list}
+Item: {item_name}
+Description: {desc_note}
+Item Department: {dept_note}
+Vendor Category: {vcat_note}
+Shopping Category: {shopping_category}
 
-        Return ONLY the subcategory name, nothing else.
+Allowed subcategories:
+{subcategory_list}
+{disambiguation}
+Return ONLY the subcategory name, nothing else.
+Example valid outputs:
+casual wear
+footwear
+vitamins
 
-        Example valid outputs:
-        casual wear
-        mobile phones
-        bakery
-
-        Now output ONLY the subcategory name:
-        """
+Now output ONLY the subcategory name:"""
 
     result = run_model(prompt)
     print("=============================================")
@@ -288,35 +343,32 @@ def classify_item_category(shopping_category, shopping_subcategory, item_name, d
 
     item_category_list = itemCategory_map[shopping_category][shopping_subcategory]
 
-    prompt = f"""
-        You are a strict classification bot.
-        Your ONLY job is to return ONE item category from the allowed list.
+    desc_note = description.strip() if description and description.strip() else "[not provided]"
+    dept_note = item_department.strip() if item_department and item_department.strip() else "[not provided]"
+    vcat_note = vendor_category.strip() if vendor_category and vendor_category.strip() else "[not provided]"
 
-        IMPORTANT: You MUST choose the BEST FIT from the allowed categories below.
-        Look at the allowed list carefully and pick the closest match.
+    prompt = f"""You are a strict classification bot.
+Your ONLY job is to return ONE item category from the allowed list below.
+DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
 
-        DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
+Item: {item_name}
+Description: {desc_note}
+Item Department: {dept_note}
+Vendor Category: {vcat_note}
+Shopping Category: {shopping_category}
+Shopping Subcategory: {shopping_subcategory}
 
-        Item: {item_name}
-        Description: {description}
-        Item Department: {item_department}
-        Vendor Category: {vendor_category}
-        Shopping Category: {shopping_category}
-        Shopping Subcategory: {shopping_subcategory}
+Allowed item categories for {shopping_category} > {shopping_subcategory}:
+{item_category_list}
 
-        Allowed item categories for {shopping_category} > {shopping_subcategory}:
-        {item_category_list}
+RULES:
+- You MUST pick from the allowed list above — do NOT invent a new name.
+- Choose the most specific and accurate match based on what the item physically is.
+- If the item name and description conflict, trust the item name.
+- If description is [not provided], rely on the item name and vendor category.
 
-        Choose the BEST FIT from the list above.
-        Return ONLY the category name exactly as it appears in the list, nothing else.
-
-        Example valid outputs:
-        t-shirt
-        chocolate cake
-        smartphone
-
-        Now output ONLY the category name:
-        """
+Return ONLY the category name exactly as it appears in the list, nothing else.
+Now output ONLY the category name:"""
 
     result = run_model(prompt)
     print("=============================================")
@@ -350,33 +402,34 @@ def classify_item_subcategory(shopping_category, shopping_subcategory, item_cate
 
     item_subcategory_list = itemSubcategory_map[shopping_category][item_category]
 
-    prompt = f"""
-        You are a strict classification bot.
-        Your ONLY job is to return ONE item subcategory.
-        DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
+    desc_note = description.strip() if description and description.strip() else "[not provided]"
+    dept_note = item_department.strip() if item_department and item_department.strip() else "[not provided]"
+    vcat_note = vendor_category.strip() if vendor_category and vendor_category.strip() else "[not provided]"
 
-        Item: {item_name}
-        Description: {description}
-        Item Department: {item_department}
-        Vendor Category: {vendor_category}
+    prompt = f"""You are a strict classification bot.
+Your ONLY job is to return ONE item subcategory from the allowed list below.
+DO NOT explain. DO NOT add reasoning. DO NOT use multiple lines.
 
-        Current Classification Path:
-        - Shopping Category: {shopping_category}
-        - Shopping Subcategory: {shopping_subcategory}
-        - Item Category: {item_category}
+Item: {item_name}
+Description: {desc_note}
+Item Department: {dept_note}
+Vendor Category: {vcat_note}
 
-        Allowed subcategories for {shopping_category} > {item_category}:
-        {item_subcategory_list}
+Current Classification Path:
+- Shopping Category: {shopping_category}
+- Shopping Subcategory: {shopping_subcategory}
+- Item Category: {item_category}
 
-        Return ONLY the subcategory name, nothing else.
+Allowed subcategories for {shopping_category} > {item_category}:
+{item_subcategory_list}
 
-        Example valid outputs:
-        sweatshirt
-        running shoes
-        vitamin d
+RULES:
+- You MUST pick from the allowed list above — do NOT invent a new name.
+- Choose the closest match to what the item physically is.
+- If description is [not provided], rely solely on the item name and the classification path above.
 
-        Now output ONLY the subcategory name:
-        """
+Return ONLY the subcategory name exactly as it appears in the list, nothing else.
+Now output ONLY the subcategory name:"""
 
     result = run_model(prompt)
     print("=============================================")
@@ -397,11 +450,12 @@ def classify_item_subcategory(shopping_category, shopping_subcategory, item_cate
 
 LOW_CONFIDENCE_ITEM_CATEGORIES = []
 
-def calculate_confidence(vendor_category, shopping_category, item_category=""):
+def calculate_confidence(vendor_category, shopping_category, item_category="", description=""):
     """
     Calculate confidence level based on:
     1. Whether item_category is in the low confidence list
-    2. Whether vendor_category matches shopping_category (case-insensitive)
+    2. Whether description AND vendor_category are both missing (unreliable inputs)
+    3. Whether vendor_category matches shopping_category (case-insensitive)
     """
     if item_category:
         item_cat_normalized = item_category.lower().strip()
@@ -409,6 +463,12 @@ def calculate_confidence(vendor_category, shopping_category, item_category=""):
             return "low"
 
     if not vendor_category or not shopping_category:
+        return "low"
+
+    # Force low confidence when both primary context signals are absent
+    desc_missing = not description or not description.strip()
+    vcat_vague = len(vendor_category.strip()) < 3
+    if desc_missing and vcat_vague:
         return "low"
 
     vendor_cat_normalized = vendor_category.lower().strip()
@@ -452,7 +512,7 @@ def classify_single_item(item_data, index, shopping_category_override=None):
             item_name, description, item_department, vendor_category
         )
 
-        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat)
+        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat, description)
 
         if not shopping_cat or not shopping_subcat or not item_cat:
             confidence = "low"
@@ -1080,7 +1140,7 @@ def classify_single():
         )
 
         # Calculate confidence
-        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat)
+        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat, description)
 
         if confidence_override == "low":
             confidence = "low"
@@ -1179,12 +1239,17 @@ def classify_csv():
         pd.DataFrame(columns=output_columns).to_csv(output_path, index=False)
         print(f"[CSV Processing] Output CSV initialized with headers")
 
+        def _safe_str(val):
+            """Convert pandas cell to string, treating NaN/None as empty."""
+            s = str(val).strip() if val is not None else ''
+            return '' if s.lower() == 'nan' else s
+
         # Process each row
         for idx, row in tqdm(df.iterrows(), total=total_rows, desc="Classifying items", unit="row"):
-            item_name = str(row.get('item_name', '')).strip()
-            description = str(row.get('description', '')).strip()
-            item_department = str(row.get('item_department', '')).strip()
-            vendor_category = str(row.get('vendor_category', '')).strip()
+            item_name = _safe_str(row.get('item_name', ''))
+            description = _safe_str(row.get('description', ''))
+            item_department = _safe_str(row.get('item_department', ''))
+            vendor_category = _safe_str(row.get('vendor_category', ''))
 
             if not item_name:
                 print(f"[Row {idx}] Skipped - No item name")
@@ -1240,7 +1305,7 @@ def classify_csv():
             )
             df.at[idx, 'item_subcategory'] = item_subcat
 
-            confidence = calculate_confidence(vendor_category, shopping_cat, item_cat)
+            confidence = calculate_confidence(vendor_category, shopping_cat, item_cat, description)
 
             if confidence_override == "low":
                 confidence = "low"
@@ -1805,6 +1870,7 @@ def generate_description_batch():
 @app.route('/api/grammar/check', methods=['POST'])
 def grammar_check():
     """
+    
     Grammar check endpoint - supports both single and batch processing
     Uses LanguageTool locally (no external service required)
 
@@ -2005,7 +2071,7 @@ def pipeline_process():
             item_name, description, item_department, vendor_category
         )
 
-        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat)
+        confidence = calculate_confidence(vendor_category, shopping_cat, item_cat, description)
         if confidence_override == "low":
             confidence = "low"
 

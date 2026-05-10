@@ -434,5 +434,6 @@ itemSubcategory_map = {
     "groceries": groceries_itemSubcategory,
     "electronics": electronics_itemSubcategory,
     "entertainment": entertainment_itemSubcategory,
-    "kids": kids_itemSubcategory
+    "kids": kids_itemSubcategory,
+    "restaurants": restaurants_itemCategory
 }
