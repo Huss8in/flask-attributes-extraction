@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY mapping.py .
 COPY ai_att_mapping.py .
+COPY standardization_mapping.py .
 
 # Expose port
 EXPOSE 6002
