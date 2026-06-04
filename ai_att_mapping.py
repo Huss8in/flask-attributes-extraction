@@ -1186,7 +1186,27 @@ Country of origin:"
                     """
     ],
     ##################
-    "household products / Home Scent": [
+    "household products": [
+        """
+      
+Brand:
+Generic Name:
+Product Name:
+Size:
+Weight:
+Measurements:
+Components:
+Scent:
+Purpose:
+Features:
+Material:
+Color:
+Pattern:
+Finishing:
+Country of origin:"""
+    ],
+    ##################
+    "Home Scent": [
         """
       
 Brand:

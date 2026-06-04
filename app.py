@@ -61,6 +61,20 @@ from ai_att_mapping import category_mapping
 
 # Import standardization mapping
 from standardization_mapping import standardization_map
+from standardization_synonyms import synonyms_map
+
+# Flatten synonyms_map ({canonical: [synonyms]}) into a fast reverse lookup
+# of shape { attribute_key: { synonym_lowercase: canonical_value } } so each
+# attribute lookup stays O(1) at request time.
+_SYNONYM_LOOKUP = {}
+for _attr, _canonical_to_syns in synonyms_map.items():
+    _bucket = {}
+    for _canonical, _syns in _canonical_to_syns.items():
+        # Allow the canonical value itself to resolve via this map too
+        _bucket[_canonical.strip().lower()] = _canonical
+        for _syn in _syns:
+            _bucket[_syn.strip().lower()] = _canonical
+    _SYNONYM_LOOKUP[_attr] = _bucket
 
 # ============================================================
 # FLASK APP INITIALIZATION
@@ -902,7 +916,7 @@ def merge_with_template(template, model_output):
 
 
 def extract_ai_attributes(item_name, description, vendor_category, shopping_category,
-                         shopping_subcategory, item_category, images=None):
+                         shopping_subcategory, item_category, images=None, variant_name=''):
     """
     Extract AI attributes using integrated approach:
     1. If fashion/home&garden with images: use grad model for color/material
@@ -951,6 +965,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
 
     # Step 2: Build OpenAI prompt with grad hints
     input_text = f"""Item Name: {item_name}
+Variant Name: {variant_name}
 Description: {description}
 Vendor Category: {vendor_category}
 Shopping Category: {shopping_category}
@@ -967,6 +982,13 @@ Item Category: {item_category}"""
         grad_hints += f"\nDetected Material (from image analysis): {grad_material}"
         color_material_hint += "\n- Material: use the detected material from image analysis if provided above"
 
+    # When no image-based color was detected but a variant_name is present,
+    # explicitly instruct the model to extract color/size/material from it.
+    if not grad_color and variant_name:
+        color_material_hint += f"\n- Color: the Variant Name is \"{variant_name}\" — extract the color from it (e.g. 'Light Beige/S/Polyester' → Color: Light Beige)"
+    if not grad_material and variant_name:
+        color_material_hint += f"\n- Material and Size: also extract these from the Variant Name if present"
+
     prompt = f"""
 You are a strict AI attribute extractor for e-commerce products.
 Analyze the item below and extract ONLY attributes that can be clearly inferred.
@@ -978,6 +1000,7 @@ Leave unknown attributes empty.
 INSTRUCTIONS:
 - Fill only known attributes; leave others empty
 - Use concise English values
+- Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
 - Gender: choose strictly from ["Women", "Men", "Unisex women, Unisex men", "Girls", "Boys", "Unisex girls, unisex boys"]
 - Generic Name: identify the main item (e.g. if "Matelda Chocolate cake 120 grams" → Generic Name: "cake")
 - Product Name: the product name without size/quantity (e.g. "Matelda Chocolate cake"){color_material_hint}
@@ -1000,6 +1023,7 @@ def extract_single_item_attributes(item_data, index):
     """Extract AI attributes for a single item - used for parallel processing"""
     try:
         item_name = item_data.get('item_name', '')
+        variant_name = item_data.get('variant_name', '')
         description = item_data.get('description', '')
         vendor_category = item_data.get('vendor_category', '')
         shopping_category = item_data.get('shopping_category', '')
@@ -1021,7 +1045,7 @@ def extract_single_item_attributes(item_data, index):
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images
+            images, variant_name=variant_name
         )
 
         # Check if there's a warning from grad model
@@ -1427,6 +1451,7 @@ def extract_attributes():
         data = request.get_json()
 
         item_name = data.get('item_name', '')
+        variant_name = data.get('variant_name', '')
         description = data.get('description', '')
         vendor_category = data.get('vendor_category', '')
         shopping_category = data.get('shopping_category', '')
@@ -1443,7 +1468,7 @@ def extract_attributes():
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images
+            images, variant_name=variant_name
         )
 
         # Check if there's a warning from grad model
@@ -1619,8 +1644,21 @@ def standardize_ai_attributes(ai_attributes_input):
     """
     Standardize AI attribute values against the standardization_map.
 
+    Resolution order per attribute:
+      1. If value is already a canonical value -> keep it (source: "synonym").
+      2. If value matches a known synonym      -> map to canonical (source: "synonym").
+      3. Otherwise                             -> call OpenAI to pick the best
+                                                  match from the allowed list
+                                                  (source: "ai"). This case is
+                                                  flagged so the caller knows
+                                                  the value was not in the
+                                                  synonym list.
+
     ai_attributes_input: str (newline-separated "Key: Value") or list of such strings.
-    Returns (standardized_str, standardized_array, changes_list).
+    Returns (standardized_str, standardized_array, changes_list, ai_fallback_list)
+      where ai_fallback_list contains dicts:
+        {"attribute": <name>, "original": <raw>, "standardized": <final>}
+      for every attribute that had to fall back to the AI model.
     """
     # Normalize input to a list of raw lines
     if isinstance(ai_attributes_input, list):
@@ -1655,12 +1693,66 @@ def standardize_ai_attributes(ai_attributes_input):
             f"{n}: {v}" if v is not None else n
             for n, v in parsed
         ]
-        return '\n'.join(result_lines), result_lines, []
+        return '\n'.join(result_lines), result_lines, [], []
 
-    # Build a single prompt for all attributes that need standardization
+    # ------------------------------------------------------------------
+    # Fast path: resolve via local synonyms_map first to save AI tokens.
+    # Anything not matched here falls through to the AI model below.
+    # ------------------------------------------------------------------
+    synonym_resolved = {}  # display_name.lower() -> canonical value
+    remaining = []         # entries still needing the AI model
+
+    for display_name, original_value, allowed in to_standardize:
+        attr_key = _attr_key(display_name)
+        allowed_lower = {v.lower(): v for v in allowed}
+        raw_lower = original_value.strip().lower()
+
+        # (a) Already a canonical value (case-insensitive match in allowed list)
+        if raw_lower in allowed_lower:
+            synonym_resolved[display_name.lower()] = allowed_lower[raw_lower]
+            continue
+
+        # (b) Known synonym for this attribute (uses pre-built reverse lookup)
+        attr_syns = _SYNONYM_LOOKUP.get(attr_key, {})
+        canonical = attr_syns.get(raw_lower)
+        if canonical and canonical.lower() in allowed_lower:
+            # enforce exact casing from the standardization map
+            synonym_resolved[display_name.lower()] = allowed_lower[canonical.lower()]
+            continue
+
+        # (c) Needs AI
+        remaining.append((display_name, original_value, allowed))
+
+    # If everything was resolved via synonyms, skip the AI call entirely.
+    if not remaining:
+        standardized_lookup = synonym_resolved
+        changes = []
+        for display_name, original_value, _allowed in to_standardize:
+            final_value = standardized_lookup[display_name.lower()]
+            if final_value.lower() != original_value.lower():
+                changes.append({
+                    "attribute": display_name,
+                    "original": original_value,
+                    "standardized": final_value,
+                    "source": "synonym"
+                })
+
+        result_lines = []
+        for display_name, value in parsed:
+            if value is None:
+                result_lines.append(display_name)
+            elif value == '':
+                result_lines.append(f"{display_name}:")
+            else:
+                final = standardized_lookup.get(display_name.lower(), value)
+                result_lines.append(f"{display_name}: {final}")
+        # All resolved via synonyms -> no AI fallback
+        return '\n'.join(result_lines), result_lines, changes, []
+
+    # Build a single prompt for ONLY the remaining (unresolved) attributes
     attr_sections = '\n'.join(
         f'- {name}: "{value}"\n  Allowed values: {allowed}'
-        for name, value, allowed in to_standardize
+        for name, value, allowed in remaining
     )
 
     prompt = f"""You are a strict attribute standardization bot for e-commerce products.
@@ -1691,15 +1783,27 @@ Output (one line per attribute, same order as above):"""
     # Validate each standardized value against its allowed list
     standardized_lookup = {}  # display_name.lower() → final value
     changes = []
+    ai_fallback = []  # attributes that were NOT in synonyms and required the AI model
 
     for display_name, original_value, allowed in to_standardize:
         allowed_lower = {v.lower(): v for v in allowed}
-        raw_std = model_values.get(display_name.lower(), original_value)
 
-        if raw_std.lower() in allowed_lower:
-            final_value = allowed_lower[raw_std.lower()]  # enforce exact casing from mapping
+        # Prefer synonym-resolved value if present (no AI was called for it)
+        if display_name.lower() in synonym_resolved:
+            final_value = synonym_resolved[display_name.lower()]
+            source = "synonym"
         else:
-            final_value = original_value  # fallback: keep original
+            raw_std = model_values.get(display_name.lower(), original_value)
+            if raw_std.lower() in allowed_lower:
+                final_value = allowed_lower[raw_std.lower()]  # enforce exact casing from mapping
+            else:
+                final_value = original_value  # fallback: keep original
+            source = "ai"
+            ai_fallback.append({
+                "attribute": display_name,
+                "original": original_value,
+                "standardized": final_value
+            })
 
         standardized_lookup[display_name.lower()] = final_value
 
@@ -1707,7 +1811,8 @@ Output (one line per attribute, same order as above):"""
             changes.append({
                 "attribute": display_name,
                 "original": original_value,
-                "standardized": final_value
+                "standardized": final_value,
+                "source": source
             })
 
     # Rebuild output lines in original order
@@ -1722,7 +1827,7 @@ Output (one line per attribute, same order as above):"""
             result_lines.append(f"{display_name}: {final}")
 
     result_str = '\n'.join(result_lines)
-    return result_str, result_lines, changes
+    return result_str, result_lines, changes, ai_fallback
 
 
 def _standardize_single(item_data, index):
@@ -1741,13 +1846,25 @@ def _standardize_single(item_data, index):
                 "changes": []
             }
 
-        std_str, std_array, changes = standardize_ai_attributes(input_data)
+        std_str, std_array, changes, ai_fallback = standardize_ai_attributes(input_data)
+        ai_used = len(ai_fallback) > 0
+        if ai_used:
+            flagged = ", ".join(f"{f['attribute']} (\"{f['original']}\")" for f in ai_fallback)
+            message = (
+                f"AI fallback used for {len(ai_fallback)} attribute(s) not found in synonyms: {flagged}. "
+                f"Consider adding them to standardization_synonyms.py to save tokens."
+            )
+        else:
+            message = "All attributes resolved via synonyms map (no AI call needed)."
         return index, {
             "success": True,
+            "message": message,
             "standardized_attributes": std_str,
             "standardized_attributes_array": std_array,
             "changes": changes,
-            "changes_count": len(changes)
+            "changes_count": len(changes),
+            "ai_fallback_used": ai_used,
+            "ai_fallback_attributes": ai_fallback
         }
     except Exception as e:
         return index, {
@@ -1804,14 +1921,26 @@ def standardize_attributes():
         if not OPENAI_API_KEY:
             return jsonify({"error": "OpenAI API key not configured"}), 500
 
-        std_str, std_array, changes = standardize_ai_attributes(input_data)
+        std_str, std_array, changes, ai_fallback = standardize_ai_attributes(input_data)
+        ai_used = len(ai_fallback) > 0
+        if ai_used:
+            flagged = ", ".join(f"{f['attribute']} (\"{f['original']}\")" for f in ai_fallback)
+            message = (
+                f"AI fallback used for {len(ai_fallback)} attribute(s) not found in synonyms: {flagged}. "
+                f"Consider adding them to standardization_synonyms.py to save tokens."
+            )
+        else:
+            message = "All attributes resolved via synonyms map (no AI call needed)."
 
         return jsonify({
             "success": True,
+            "message": message,
             "standardized_attributes": std_str,
             "standardized_attributes_array": std_array,
             "changes": changes,
-            "changes_count": len(changes)
+            "changes_count": len(changes),
+            "ai_fallback_used": ai_used,
+            "ai_fallback_attributes": ai_fallback
         }), 200
 
     except Exception as e:
