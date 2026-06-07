@@ -830,24 +830,64 @@ def get_attribute_template(shopping_category, item_category, shopping_subcategor
     return mapping_lower[lookup_key][0] if lookup_key in mapping_lower else None
 
 
-def run_openai_model(prompt):
-    """Run OpenAI model with given prompt"""
+def _normalize_image_urls(images, limit=4):
+    """Accept either list of URL strings or list of dicts ({"large":..., "medium":..., "small":...})
+    and return a flat list of URL strings (preferring 'large').
+    """
+    if not images:
+        return []
+    urls = []
+    for img in images:
+        if isinstance(img, str):
+            urls.append(img)
+        elif isinstance(img, dict):
+            url = img.get("large") or img.get("medium") or img.get("small") or img.get("url")
+            if url:
+                urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def run_openai_model(prompt, images=None):
+    """Run OpenAI model with given prompt.
+
+    If `images` is provided (list of URLs or image dicts), automatically switches
+    to the gpt-4o vision model so the model can analyze the product photos.
+    Otherwise uses the configured text model.
+    """
     try:
+        image_urls = _normalize_image_urls(images, limit=4) if images else []
+        use_vision = bool(image_urls)
+        model = "gpt-4o" if use_vision else OPENAI_MODEL_NAME
+
+        if use_vision:
+            user_content = []
+            for url in image_urls:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": url, "detail": "low"}
+                })
+            user_content.append({"type": "text", "text": prompt})
+            user_message = {"role": "user", "content": user_content}
+            print(f"[DEBUG] Calling OpenAI Vision ({model}) with {len(image_urls)} image(s)...")
+        else:
+            user_message = {"role": "user", "content": prompt}
+            print(f"[DEBUG] Calling OpenAI API ({model}) text-only...")
+
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
         payload = {
-            "model": OPENAI_MODEL_NAME,
+            "model": model,
             "messages": [
-                {"role": "system", "content": "You are a precise AI attribute extractor for e-commerce products. Follow instructions exactly."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You are a precise AI attribute extractor for e-commerce products. Follow instructions exactly. When images are provided, analyze them carefully to determine color, material, pattern, and other visual attributes."},
+                user_message
             ],
             "max_tokens": 300,
             "temperature": 0.3
         }
-
-        print(f"[DEBUG] Calling OpenAI API...")
         r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
@@ -920,7 +960,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     """
     Extract AI attributes using integrated approach:
     1. If fashion/home&garden with images: use grad model for color/material
-    2. Use OpenAI model with color/material hints
+    2. Use OpenAI model (vision-enabled when images are present) for full extraction
     3. Return combined attributes
     """
 
@@ -930,6 +970,9 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
         print(f"[DEBUG] No template found for {shopping_category}/{item_category}")
         return "", {}
 
+    # Normalize images: accept either raw URL strings or dicts with large/medium/small.
+    image_urls = _normalize_image_urls(images, limit=4)
+
     # Step 1: Try grad model for fashion/home&garden with images
     grad_color = None
     grad_material = None
@@ -937,11 +980,11 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
     used_fallback = False
 
     if (shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES and
-        images and len(images) > 0):
+        image_urls):
 
         print(f"[INFO] Calling external GradProject service for {shopping_category}...")
         grad_color, grad_material, grad_data = predict_with_grad_model(
-            images,
+            image_urls,
             description,
             item_category.lower().strip(),
             shopping_category.lower().strip()
@@ -954,7 +997,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
             if USE_OPENAI_FALLBACK:
                 print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
                 grad_color, grad_material, vision_confidence = predict_color_material_openai(
-                    item_name, description, item_category, images
+                    item_name, description, item_category, image_urls
                 )
                 used_fallback = True
                 if grad_color or grad_material:
@@ -1000,6 +1043,7 @@ Leave unknown attributes empty.
 INSTRUCTIONS:
 - Fill only known attributes; leave others empty
 - Use concise English values
+- If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
 - Gender: choose strictly from ["Women", "Men", "Unisex women, Unisex men", "Girls", "Boys", "Unisex girls, unisex boys"]
 - Generic Name: identify the main item (e.g. if "Matelda Chocolate cake 120 grams" → Generic Name: "cake")
@@ -1014,7 +1058,9 @@ OUTPUT FORMAT (exactly, no deviations):
 Output ONLY the above format. NO markdown, NO extra lines or explanations.
 """
 
-    result = run_openai_model(prompt)
+    # Pass images to the main extraction call so the model can use vision for
+    # color, pattern, material, fashion_type, gender, etc. — not just text hints.
+    result = run_openai_model(prompt, images=image_urls if image_urls else None)
     result = merge_with_template(template, result)
     return result, grad_data
 
