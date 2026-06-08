@@ -1054,9 +1054,10 @@ INSTRUCTIONS:
 - Use concise English values
 - If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
-- Gender: choose strictly from ["Women", "Men", "Unisex women, Unisex men", "Girls", "Boys", "Unisex girls, unisex boys"]
-- Generic Name: identify the main item (e.g. if "Matelda Chocolate cake 120 grams" → Generic Name: "cake")
-- Product Name: the product name without size/quantity (e.g. "Matelda Chocolate cake"){color_material_hint}
+- Brand: the brand or manufacturer name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma). Fill this whenever the Item Name starts with a brand. Leave empty ONLY if there is genuinely no brand in the Item Name.
+- Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it from the Shopping Category, Item Category, Item Name, or the images (e.g. "Women Activewear" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
+- Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
+- Product Name: the descriptive product name WITHOUT the brand and WITHOUT any size, quantity, or variant. Strip the brand word(s) and any units/sizes (e.g. "Astonish Premium Starch Spray" -> Premium Starch Spray; "Matelda Chocolate Cake 120 grams" -> Chocolate Cake; "White Magic Jumbo Kitchen Rolls Large" -> Jumbo Kitchen Rolls). NEVER output the full Item Name unchanged.{color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
