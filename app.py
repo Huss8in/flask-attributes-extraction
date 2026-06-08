@@ -47,6 +47,7 @@ RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
+USE_GPT4O_VISION = False  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
 
 # Translation configuration
 AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
@@ -644,6 +645,11 @@ def predict_color_material_openai(item_name, description, item_category, images=
     If no images provided, falls back to text-only analysis.
     Returns (color, material, confidence_data) where confidence_data contains confidence scores.
     """
+    # Hard kill switch: skip vision entirely (e.g. quota exhausted)
+    if not USE_GPT4O_VISION:
+        print("[INFO] USE_GPT4O_VISION=False — skipping GPT-4o color/material vision call.")
+        return None, None, {"skipped": "USE_GPT4O_VISION=False"}
+
     try:
         VISION_MODEL = "gpt-4o"
 
@@ -858,7 +864,10 @@ def run_openai_model(prompt, images=None):
     """
     try:
         image_urls = _normalize_image_urls(images, limit=4) if images else []
-        use_vision = bool(image_urls)
+        # Respect the global vision kill-switch — fall back to text-only if disabled.
+        use_vision = bool(image_urls) and USE_GPT4O_VISION
+        if image_urls and not USE_GPT4O_VISION:
+            print("[INFO] USE_GPT4O_VISION=False — ignoring images, using text-only extraction.")
         model = "gpt-4o" if use_vision else OPENAI_MODEL_NAME
 
         if use_vision:
