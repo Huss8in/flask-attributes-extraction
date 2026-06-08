@@ -1000,9 +1000,11 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
                     item_name, description, item_category, image_urls
                 )
                 used_fallback = True
-                if grad_color or grad_material:
-                    grad_data["fallback"] = "openai-gpt4o-vision"
-                    grad_data["vision_confidence"] = vision_confidence
+                # Always mark that the OpenAI fallback was used (even if it found
+                # nothing) so callers don't mistakenly report grad_model_used=True
+                # when GradProject was actually unavailable/low-confidence.
+                grad_data["fallback"] = "openai-gpt4o-vision"
+                grad_data["vision_confidence"] = vision_confidence
             else:
                 print("[WARNING] GradProject unavailable or returned no results. OpenAI fallback is disabled (USE_OPENAI_FALLBACK=False).")
 
@@ -1104,7 +1106,7 @@ def extract_single_item_attributes(item_data, index):
             "message": "AI attributes extracted successfully.",
             "ai_attributes": attributes,
             "ai_attributes_array": attributes.split('\n') if attributes else [],
-            "grad_model_used": bool(grad_data) and "warning" not in grad_data,
+            "grad_model_used": bool(grad_data) and "warning" not in grad_data and "fallback" not in grad_data,
             "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
             "warning": warning_message
         }
@@ -1527,7 +1529,7 @@ def extract_attributes():
             "message": "AI attributes extracted successfully.",
             "ai_attributes": attributes,
             "ai_attributes_array": attributes.split('\n') if attributes else [],
-            "grad_model_used": bool(grad_data) and "warning" not in grad_data,
+            "grad_model_used": bool(grad_data) and "warning" not in grad_data and "fallback" not in grad_data,
             "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
             "warning": warning_message
         }), 200
@@ -2554,7 +2556,7 @@ def pipeline_process():
         )
 
         ai_attributes_result["english"] = attributes
-        ai_attributes_result["grad_model_used"] = bool(grad_data) and "warning" not in grad_data
+        ai_attributes_result["grad_model_used"] = bool(grad_data) and "warning" not in grad_data and "fallback" not in grad_data
         ai_attributes_result["grad_predictions"] = grad_data if grad_data and "warning" not in grad_data else None
 
         # Add warning if GradProject unavailable
