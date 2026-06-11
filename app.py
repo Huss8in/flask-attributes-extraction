@@ -1006,7 +1006,8 @@ def merge_with_template(template, model_output):
 
 
 def extract_ai_attributes(item_name, description, vendor_category, shopping_category,
-                         shopping_subcategory, item_category, images=None, variant_name=''):
+                         shopping_subcategory, item_category, images=None, variant_name='',
+                         menu_category=''):
     """
     Extract AI attributes using integrated approach:
     1. If fashion/home&garden with images: use grad model for color/material
@@ -1061,6 +1062,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
 Variant Name: {variant_name}
 Description: {description}
 Vendor Category: {vendor_category}
+Menu Category: {menu_category}
 Shopping Category: {shopping_category}
 Shopping Subcategory: {shopping_subcategory}
 Item Category: {item_category}"""
@@ -1096,7 +1098,7 @@ INSTRUCTIONS:
 - If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
 - Brand: the brand or manufacturer name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma). Fill this whenever the Item Name starts with a brand. Leave empty ONLY if there is genuinely no brand in the Item Name.
-- Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it from the Shopping Category, Item Category, Item Name, or the images (e.g. "Women Activewear" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
+- Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it FIRST from the Menu Category, then the Shopping Category, Item Category, Item Name, or the images (e.g. Menu Category "Women Shirts" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). The Menu Category is the strongest gender signal — never contradict it (if it says "Women", the Gender is Women, not Men). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
 - Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
 - Product Name: the descriptive product name WITHOUT the brand and WITHOUT any size, quantity, or variant. Strip the brand word(s) and any units/sizes (e.g. "Astonish Premium Starch Spray" -> Premium Starch Spray; "Matelda Chocolate Cake 120 grams" -> Chocolate Cake; "White Magic Jumbo Kitchen Rolls Large" -> Jumbo Kitchen Rolls). NEVER output the full Item Name unchanged.{color_material_hint}
 - Keep the output clean and structured exactly as below
@@ -1123,6 +1125,7 @@ def extract_single_item_attributes(item_data, index):
         variant_name = item_data.get('variant_name', '')
         description = item_data.get('description', '')
         vendor_category = item_data.get('vendor_category', '')
+        menu_category = item_data.get('menu_category', '')
         shopping_category = item_data.get('shopping_category', '')
         shopping_subcategory = item_data.get('shopping_subcategory', '')
         item_category = item_data.get('item_category', '')
@@ -1142,7 +1145,7 @@ def extract_single_item_attributes(item_data, index):
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name
+            images, variant_name=variant_name, menu_category=menu_category
         )
 
         # Check if there's a warning from grad model
@@ -1551,6 +1554,7 @@ def extract_attributes():
         variant_name = data.get('variant_name', '')
         description = data.get('description', '')
         vendor_category = data.get('vendor_category', '')
+        menu_category = data.get('menu_category', '')
         shopping_category = data.get('shopping_category', '')
         shopping_subcategory = data.get('shopping_subcategory', '')
         item_category = data.get('item_category', '')
@@ -1565,7 +1569,7 @@ def extract_attributes():
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name
+            images, variant_name=variant_name, menu_category=menu_category
         )
 
         # Check if there's a warning from grad model
