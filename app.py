@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import re
+import random
 from datetime import timedelta
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -113,6 +114,46 @@ def get_grammar_tool():
         grammar_tool = language_tool_python.LanguageTool('en-US')
         print("[INFO] LanguageTool initialized successfully")
     return grammar_tool
+
+
+def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
+    """POST to the OpenAI API with retry + backoff on 429 (rate limit) and 5xx
+    errors. Respects the Retry-After header / "try again in Xs" hint when present,
+    otherwise uses exponential backoff. Returns the final requests.Response so the
+    caller's raise_for_status() behaves exactly as before. This prevents items
+    from being dropped with "Error: 429" on transient rate limits.
+    """
+    attempt = 0
+    while True:
+        resp = requests.post(OPENAI_API_URL, json=payload, headers=headers, timeout=timeout)
+        if resp.status_code < 400:
+            return resp
+        retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
+        if not retryable or attempt >= max_retries:
+            return resp  # let the caller's raise_for_status() raise as usual
+
+        wait = None
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                wait = float(retry_after)
+            except ValueError:
+                wait = None
+        if wait is None:
+            try:
+                msg = resp.json().get("error", {}).get("message", "")
+            except Exception:
+                msg = ""
+            m = re.search(r"try again in ([\d.]+)s", msg, re.IGNORECASE)
+            if m:
+                wait = float(m.group(1))
+        if wait is None:
+            wait = min(2 ** attempt, 20)  # exponential backoff, capped at 20s
+        wait += 0.5 + random.random()      # jitter + small safety buffer
+
+        attempt += 1
+        print(f"[OpenAI] {resp.status_code} on attempt {attempt}/{max_retries}; retrying in {wait:.1f}s")
+        time.sleep(wait)
 
 # ============================================================
 # GRADPROJECT SERVICE - EXTERNAL API
@@ -701,7 +742,7 @@ Rules:
             "temperature": 0.1
         }
 
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -897,7 +938,7 @@ def run_openai_model(prompt, images=None):
             "max_tokens": 300,
             "temperature": 0.3
         }
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -2139,7 +2180,7 @@ OUTPUT: Write ONLY the product description, no additional text or formatting.
         }
 
         print(f"[DEBUG] Calling OpenAI API for description generation...")
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         description = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -2727,7 +2768,7 @@ DSW: <comma-separated list>
             "temperature": 0.3
         }
 
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 
