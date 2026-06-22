@@ -1101,13 +1101,18 @@ INSTRUCTIONS:
 - Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it FIRST from the Menu Category, then the Shopping Category, Item Category, Item Name, or the images (e.g. Menu Category "Women Shirts" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). The Menu Category is the strongest gender signal — never contradict it (if it says "Women", the Gender is Women, not Men). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
 - Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
 - Features: ONLY the 1-3 CORE/UNIQUE selling features of this specific product — what makes it different from a generic item in the same category. Features is NOT a dumping ground; do NOT include attributes that already have their own field (Color, Size, Material, Pattern, Brand, Gender, etc. all have dedicated fields — never put them in Features). Examples of valid Features values: "waterproof", "wireless charging, face unlock", "non-stick coating", "anti-bacterial". Examples of WRONG Features (do NOT do this): "blue, large, cotton, women, casual" (these belong in Color/Size/Material/Gender/Fashion Type). If the product has no distinctive feature beyond what's already captured elsewhere, leave Features EMPTY — do not invent or duplicate.
-- Product Name: the clean canonical product identifier — KEEP the brand and the product/model name, but STRIP all packaging/variant/marketing noise. Remove: parenthesized specs like "(256 GB)", color/variant after a dash like "- Cosmic Orange", size/quantity like "120 grams" or "Large", everything after pipes "|" (e.g. "| Tax Paid | 2 Years Warranty"), and feature taglines like "with Face ID". The Product Name MUST be SHORTER than the Item Name (typically 2-5 words). Examples:
+- Product Name: OPTIONAL — only fill when there is a real branded product/model identifier. KEEP the brand and the product/model name, but STRIP all packaging/variant/marketing noise. Remove: parenthesized specs like "(256 GB)", color/variant after a dash like "- Cosmic Orange", size/quantity like "120 grams" or "Large", everything after pipes "|" (e.g. "| Tax Paid | 2 Years Warranty"), and feature taglines like "with Face ID". When filled, Product Name MUST be SHORTER than the Item Name (typically 2-5 words). Examples to FILL:
   - "Apple iPhone 17 Pro Max (256 GB) - Cosmic Orange with Face ID | Tax Paid | 2 Years Official Warranty" -> "Apple iPhone 17 Pro Max"
   - "Samsung Galaxy S24 Ultra 512GB Black - Free Shipping" -> "Samsung Galaxy S24 Ultra"
   - "Matelda Chocolate Cake 120 grams" -> "Matelda Chocolate Cake"
   - "Astonish Premium Starch Spray 500ml" -> "Astonish Premium Starch Spray"
   - "White Magic Jumbo Kitchen Rolls Large - 6 Pack" -> "White Magic Jumbo Kitchen Rolls"
-NEVER output the full Item Name unchanged — if your Product Name is identical to the Item Name you have failed this task.{color_material_hint}
+Leave Product Name EMPTY when the item has no real brand or model identifier — generic / unbranded / commodity products. Examples to LEAVE EMPTY:
+  - "Tomatoes 1kg" -> "" (just a commodity; Generic Name: tomatoes)
+  - "Plain White T-Shirt" -> "" (no brand or model)
+  - "Fresh Eggs - 12 pack" -> "" (commodity)
+  - "Cotton Bed Sheet King Size" -> "" (no brand or product line)
+NEVER output the full Item Name unchanged — if your Product Name is identical to the Item Name, leave it EMPTY instead.{color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
