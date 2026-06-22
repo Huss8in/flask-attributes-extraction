@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import re
+import random
 from datetime import timedelta
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,6 +48,7 @@ RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
+USE_GPT4O_VISION = False  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
 
 # Translation configuration
 AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
@@ -112,6 +114,46 @@ def get_grammar_tool():
         grammar_tool = language_tool_python.LanguageTool('en-US')
         print("[INFO] LanguageTool initialized successfully")
     return grammar_tool
+
+
+def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
+    """POST to the OpenAI API with retry + backoff on 429 (rate limit) and 5xx
+    errors. Respects the Retry-After header / "try again in Xs" hint when present,
+    otherwise uses exponential backoff. Returns the final requests.Response so the
+    caller's raise_for_status() behaves exactly as before. This prevents items
+    from being dropped with "Error: 429" on transient rate limits.
+    """
+    attempt = 0
+    while True:
+        resp = requests.post(OPENAI_API_URL, json=payload, headers=headers, timeout=timeout)
+        if resp.status_code < 400:
+            return resp
+        retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
+        if not retryable or attempt >= max_retries:
+            return resp  # let the caller's raise_for_status() raise as usual
+
+        wait = None
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                wait = float(retry_after)
+            except ValueError:
+                wait = None
+        if wait is None:
+            try:
+                msg = resp.json().get("error", {}).get("message", "")
+            except Exception:
+                msg = ""
+            m = re.search(r"try again in ([\d.]+)s", msg, re.IGNORECASE)
+            if m:
+                wait = float(m.group(1))
+        if wait is None:
+            wait = min(2 ** attempt, 20)  # exponential backoff, capped at 20s
+        wait += 0.5 + random.random()      # jitter + small safety buffer
+
+        attempt += 1
+        print(f"[OpenAI] {resp.status_code} on attempt {attempt}/{max_retries}; retrying in {wait:.1f}s")
+        time.sleep(wait)
 
 # ============================================================
 # GRADPROJECT SERVICE - EXTERNAL API
@@ -644,6 +686,11 @@ def predict_color_material_openai(item_name, description, item_category, images=
     If no images provided, falls back to text-only analysis.
     Returns (color, material, confidence_data) where confidence_data contains confidence scores.
     """
+    # Hard kill switch: skip vision entirely (e.g. quota exhausted)
+    if not USE_GPT4O_VISION:
+        print("[INFO] USE_GPT4O_VISION=False — skipping GPT-4o color/material vision call.")
+        return None, None, {"skipped": "USE_GPT4O_VISION=False"}
+
     try:
         VISION_MODEL = "gpt-4o"
 
@@ -695,7 +742,7 @@ Rules:
             "temperature": 0.1
         }
 
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -858,7 +905,10 @@ def run_openai_model(prompt, images=None):
     """
     try:
         image_urls = _normalize_image_urls(images, limit=4) if images else []
-        use_vision = bool(image_urls)
+        # Respect the global vision kill-switch — fall back to text-only if disabled.
+        use_vision = bool(image_urls) and USE_GPT4O_VISION
+        if image_urls and not USE_GPT4O_VISION:
+            print("[INFO] USE_GPT4O_VISION=False — ignoring images, using text-only extraction.")
         model = "gpt-4o" if use_vision else OPENAI_MODEL_NAME
 
         if use_vision:
@@ -888,7 +938,7 @@ def run_openai_model(prompt, images=None):
             "max_tokens": 300,
             "temperature": 0.3
         }
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -956,7 +1006,8 @@ def merge_with_template(template, model_output):
 
 
 def extract_ai_attributes(item_name, description, vendor_category, shopping_category,
-                         shopping_subcategory, item_category, images=None, variant_name=''):
+                         shopping_subcategory, item_category, images=None, variant_name='',
+                         menu_category=''):
     """
     Extract AI attributes using integrated approach:
     1. If fashion/home&garden with images: use grad model for color/material
@@ -1011,6 +1062,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
 Variant Name: {variant_name}
 Description: {description}
 Vendor Category: {vendor_category}
+Menu Category: {menu_category}
 Shopping Category: {shopping_category}
 Shopping Subcategory: {shopping_subcategory}
 Item Category: {item_category}"""
@@ -1045,9 +1097,10 @@ INSTRUCTIONS:
 - Use concise English values
 - If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
-- Gender: choose strictly from ["Women", "Men", "Unisex women, Unisex men", "Girls", "Boys", "Unisex girls, unisex boys"]
-- Generic Name: identify the main item (e.g. if "Matelda Chocolate cake 120 grams" → Generic Name: "cake")
-- Product Name: the product name without size/quantity (e.g. "Matelda Chocolate cake"){color_material_hint}
+- Brand: the brand or manufacturer name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma). Fill this whenever the Item Name starts with a brand. Leave empty ONLY if there is genuinely no brand in the Item Name.
+- Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it FIRST from the Menu Category, then the Shopping Category, Item Category, Item Name, or the images (e.g. Menu Category "Women Shirts" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). The Menu Category is the strongest gender signal — never contradict it (if it says "Women", the Gender is Women, not Men). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
+- Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
+- Product Name: the descriptive product name WITHOUT the brand and WITHOUT any size, quantity, or variant. Strip the brand word(s) and any units/sizes (e.g. "Astonish Premium Starch Spray" -> Premium Starch Spray; "Matelda Chocolate Cake 120 grams" -> Chocolate Cake; "White Magic Jumbo Kitchen Rolls Large" -> Jumbo Kitchen Rolls). NEVER output the full Item Name unchanged.{color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
@@ -1072,6 +1125,7 @@ def extract_single_item_attributes(item_data, index):
         variant_name = item_data.get('variant_name', '')
         description = item_data.get('description', '')
         vendor_category = item_data.get('vendor_category', '')
+        menu_category = item_data.get('menu_category', '')
         shopping_category = item_data.get('shopping_category', '')
         shopping_subcategory = item_data.get('shopping_subcategory', '')
         item_category = item_data.get('item_category', '')
@@ -1091,7 +1145,7 @@ def extract_single_item_attributes(item_data, index):
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name
+            images, variant_name=variant_name, menu_category=menu_category
         )
 
         # Check if there's a warning from grad model
@@ -1500,6 +1554,7 @@ def extract_attributes():
         variant_name = data.get('variant_name', '')
         description = data.get('description', '')
         vendor_category = data.get('vendor_category', '')
+        menu_category = data.get('menu_category', '')
         shopping_category = data.get('shopping_category', '')
         shopping_subcategory = data.get('shopping_subcategory', '')
         item_category = data.get('item_category', '')
@@ -1514,7 +1569,7 @@ def extract_attributes():
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name
+            images, variant_name=variant_name, menu_category=menu_category
         )
 
         # Check if there's a warning from grad model
@@ -2129,7 +2184,7 @@ OUTPUT: Write ONLY the product description, no additional text or formatting.
         }
 
         print(f"[DEBUG] Calling OpenAI API for description generation...")
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         description = r.json()["choices"][0]["message"]["content"].strip()
 
@@ -2717,7 +2772,7 @@ DSW: <comma-separated list>
             "temperature": 0.3
         }
 
-        r = requests.post(OPENAI_API_URL, json=payload, headers=headers)
+        r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
         result = r.json()["choices"][0]["message"]["content"].strip()
 

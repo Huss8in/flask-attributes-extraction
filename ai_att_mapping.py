@@ -289,6 +289,34 @@ fashion_mapping = {
             Country of origin:"""
     ],
     ##################
+    "suit": [
+        """
+Gender:
+Age:
+Brand:
+Generic Name:
+Product Name:
+Size:
+Features:
+Types of Fashion Styles:
+Suit style:
+Collar:
+Closure Style:
+Pocket Style:
+Sleeve Style:
+Length:
+Inseam:
+Cut:
+Fit:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"""
+    ],
+    ##################
     "sandal": [
         """Gender: 
             Age: 
@@ -363,6 +391,114 @@ fashion_mapping = {
             Activity:
             Country of origin:"""
     ],
+    ##################
+    "broche": [
+"""
+Gender:
+Age:
+Brand:
+Generic Name:
+Product Name:
+Size:
+Features:
+Types of Fashion Styles:
+Gem Stones:
+Birth Stones:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"
+"""
+    ],
+    ##################
+    "tie pin": [
+        """
+Gender:
+Age:
+Brand:
+Generic Name:
+Product Name:
+Size:
+Features:
+Types of Fashion Styles:
+Gem Stones:
+Birth Stones:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"""
+    ],
+    ##################
+    "pendant": [
+        """
+Gender:
+Age:
+Brand:
+Generic Name:
+Product Name:
+Size:
+Features:
+Types of Fashion Styles:
+Gem Stones:
+Birth Stones:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"""
+    ],
+    ##################
+    "cufflink": [
+        """
+Gender:
+Generic Name:
+Product Name:
+Age:
+Brand:
+Size:
+Features:
+Types of Fashion Styles:
+Gem Stones:
+Birth Stones:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"""
+    ],
+    ##################
+    "jewelry set": [
+        """
+Gender:
+Age:
+Brand:
+Generic Name:
+Product Name:
+Size:
+Measurements:
+Features:
+Types of Fashion Styles:
+Gem Stones:
+Birth Stones:
+Material:
+Color:
+Pattern:
+Occasion:
+Activity:
+Season:
+Country of origin:"""
+    ],
+    
     ##################
     "sports shoe": [
         """Gender:
@@ -805,7 +941,7 @@ fashion_mapping = {
             Country of origin:"""
     ],
     ##################
-    "laptee": [
+    "lap tee": [
         """Gender:
             Age:
             Brand:
