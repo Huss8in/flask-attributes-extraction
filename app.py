@@ -1100,7 +1100,13 @@ INSTRUCTIONS:
 - Brand: the brand or manufacturer name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma). Fill this whenever the Item Name starts with a brand. Leave empty ONLY if there is genuinely no brand in the Item Name.
 - Gender: ALWAYS fill this for fashion, footwear, apparel, swimwear, and accessories. Infer it FIRST from the Menu Category, then the Shopping Category, Item Category, Item Name, or the images (e.g. Menu Category "Women Shirts" -> Women; "Boys Basic Tee" -> Boys; a sports bra -> Women). The Menu Category is the strongest gender signal — never contradict it (if it says "Women", the Gender is Women, not Men). Choose exactly ONE of: Women, Men, Unisex, Girls, Boys. Use Unisex when the product genuinely suits both. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies).
 - Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
-- Product Name: the descriptive product name WITHOUT the brand and WITHOUT any size, quantity, or variant. Strip the brand word(s) and any units/sizes (e.g. "Astonish Premium Starch Spray" -> Premium Starch Spray; "Matelda Chocolate Cake 120 grams" -> Chocolate Cake; "White Magic Jumbo Kitchen Rolls Large" -> Jumbo Kitchen Rolls). NEVER output the full Item Name unchanged.{color_material_hint}
+- Product Name: the clean canonical product identifier — KEEP the brand and the product/model name, but STRIP all packaging/variant/marketing noise. Remove: parenthesized specs like "(256 GB)", color/variant after a dash like "- Cosmic Orange", size/quantity like "120 grams" or "Large", everything after pipes "|" (e.g. "| Tax Paid | 2 Years Warranty"), and feature taglines like "with Face ID". The Product Name MUST be SHORTER than the Item Name (typically 2-5 words). Examples:
+  - "Apple iPhone 17 Pro Max (256 GB) - Cosmic Orange with Face ID | Tax Paid | 2 Years Official Warranty" -> "Apple iPhone 17 Pro Max"
+  - "Samsung Galaxy S24 Ultra 512GB Black - Free Shipping" -> "Samsung Galaxy S24 Ultra"
+  - "Matelda Chocolate Cake 120 grams" -> "Matelda Chocolate Cake"
+  - "Astonish Premium Starch Spray 500ml" -> "Astonish Premium Starch Spray"
+  - "White Magic Jumbo Kitchen Rolls Large - 6 Pack" -> "White Magic Jumbo Kitchen Rolls"
+NEVER output the full Item Name unchanged — if your Product Name is identical to the Item Name you have failed this task.{color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
