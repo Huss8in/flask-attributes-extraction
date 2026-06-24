@@ -1164,6 +1164,11 @@ def extract_single_item_attributes(item_data, index):
                 "grad_predictions": None
             }
 
+        # Determine whether GPT-4o vision will actually run for this item
+        # (drives the green/red row indicator in the admin panel).
+        _image_urls_norm = _normalize_image_urls(images, limit=4)
+        vision_used = USE_GPT4O_VISION and bool(_image_urls_norm)
+
         # Extract attributes
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
@@ -1183,7 +1188,12 @@ def extract_single_item_attributes(item_data, index):
             "ai_attributes_array": attributes.split('\n') if attributes else [],
             "grad_model_used": bool(grad_data) and "warning" not in grad_data,
             "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
-            "warning": warning_message
+            "warning": warning_message,
+            # GPT-4o vision indicator (green dot if True, red dot if False).
+            # "model_used": canonical model name actually invoked for this item.
+            "vision_used": vision_used,
+            "model_used": "gpt-4o" if vision_used else OPENAI_MODEL_NAME,
+            "vision_status": "green" if vision_used else "red"
         }
 
         return index, result
@@ -1588,6 +1598,11 @@ def extract_attributes():
                 "error": "item_name, shopping_category, and item_category are required"
             }), 400
 
+        # Determine whether GPT-4o vision will actually run for this item
+        # (drives the green/red row indicator in the admin panel).
+        _image_urls_norm = _normalize_image_urls(images, limit=4)
+        vision_used = USE_GPT4O_VISION and bool(_image_urls_norm)
+
         # Extract attributes
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
@@ -1607,7 +1622,11 @@ def extract_attributes():
             "ai_attributes_array": attributes.split('\n') if attributes else [],
             "grad_model_used": bool(grad_data) and "warning" not in grad_data,
             "grad_predictions": grad_data if grad_data and "warning" not in grad_data else None,
-            "warning": warning_message
+            "warning": warning_message,
+            # GPT-4o vision indicator (green dot if True, red dot if False).
+            "vision_used": vision_used,
+            "model_used": "gpt-4o" if vision_used else OPENAI_MODEL_NAME,
+            "vision_status": "green" if vision_used else "red"
         }), 200
 
     except Exception as e:
