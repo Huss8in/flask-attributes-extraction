@@ -48,7 +48,7 @@ scent = ["Wood", "Sweet", "Fruity", "Floral"]
 purpose = ["Decoration"]
 # ------------------------------------------------------------------------------------------------------------------------------ #
 # Gender
-gender = ["Men", "Women", "Unisex", "Boys", "Girls"]
+gender = ["Men", "Women", "Unisex women, Unisex men", "Boys", "Girls", "Unisex girls, Unisex boys"]
 # ------------------------------------------------------------------------------------------------------------------------------ #
 # Feature
 feature = [

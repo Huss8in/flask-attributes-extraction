@@ -187,11 +187,15 @@ synonyms_map = {
     },
 # ========================================================================
     "gender": {
-        "Men":    ["male", "man", "gents", "gentleman", "mens"],
-        "Women":  ["female", "woman", "ladies", "lady", "womens"],
-        "Unisex": ["uni", "unisex women, unisex men", "for all", "both"],
-        "Boys":   ["boy", "kids boys", "young boys"],
-        "Girls":  ["girl", "kids girls", "young girls"],
+        "Men":                         ["male", "man", "gents", "gentleman", "mens"],
+        "Women":                       ["female", "woman", "ladies", "lady", "womens"],
+        "Unisex women, Unisex men":    ["unisex", "uni", "for all", "both",
+                                        "unisex adults", "unisex adult", "unisex woman, unisex man"],
+        "Boys":                        ["boy", "kids boys", "young boys"],
+        "Girls":                       ["girl", "kids girls", "young girls"],
+        "Unisex girls, Unisex boys":   ["unisex kids", "unisex children", "unisex child",
+                                        "unisex baby", "unisex babies",
+                                        "unisex girl, unisex boy"],
     },
 # ========================================================================
     "feature": {
