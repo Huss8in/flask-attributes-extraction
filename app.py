@@ -128,6 +128,15 @@ def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
         resp = requests.post(OPENAI_API_URL, json=payload, headers=headers, timeout=timeout)
         if resp.status_code < 400:
             return resp
+        # insufficient_quota is a billing error, not a transient rate limit — it
+        # will never recover, so fail fast instead of wasting the retry budget
+        # (which otherwise pushes the whole batch past the caller's timeout).
+        try:
+            err_code = resp.json().get("error", {}).get("code", "")
+        except Exception:
+            err_code = ""
+        if err_code == "insufficient_quota":
+            return resp
         retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
         if not retryable or attempt >= max_retries:
             return resp  # let the caller's raise_for_status() raise as usual
