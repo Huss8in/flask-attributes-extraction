@@ -48,7 +48,7 @@ RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
-USE_GPT4O_VISION = True  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
+USE_GPT4O_VISION = False  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
 
 # Translation configuration
 AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
