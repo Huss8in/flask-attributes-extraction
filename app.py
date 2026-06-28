@@ -689,16 +689,19 @@ def predict_with_grad_model(images, description, category, shopping_category="fa
         return None, None, {"warning": f"GradProject prediction failed: {str(e)}"}
 
 
-def predict_color_material_openai(item_name, description, item_category, images=None):
+def predict_color_material_openai(item_name, description, item_category, images=None, use_vision=None):
     """
     Fallback: use OpenAI GPT-4o vision to predict color and material from product images.
     If no images provided, falls back to text-only analysis.
     Returns (color, material, confidence_data) where confidence_data contains confidence scores.
+
+    use_vision: per-request override. If None, falls back to the global USE_GPT4O_VISION.
     """
-    # Hard kill switch: skip vision entirely (e.g. quota exhausted)
-    if not USE_GPT4O_VISION:
-        print("[INFO] USE_GPT4O_VISION=False — skipping GPT-4o color/material vision call.")
-        return None, None, {"skipped": "USE_GPT4O_VISION=False"}
+    # Per-request flag wins over the global default.
+    effective_use_vision = USE_GPT4O_VISION if use_vision is None else bool(use_vision)
+    if not effective_use_vision:
+        print("[INFO] use_vision=False — skipping GPT-4o color/material vision call.")
+        return None, None, {"skipped": "use_vision=False"}
 
     try:
         VISION_MODEL = "gpt-4o"
@@ -905,20 +908,27 @@ def _normalize_image_urls(images, limit=4):
     return urls
 
 
-def run_openai_model(prompt, images=None):
+def run_openai_model(prompt, images=None, use_vision=None):
     """Run OpenAI model with given prompt.
 
     If `images` is provided (list of URLs or image dicts), automatically switches
     to the gpt-4o vision model so the model can analyze the product photos.
     Otherwise uses the configured text model.
+
+    use_vision: per-request override. If None, falls back to the global
+    USE_GPT4O_VISION. Set to False to force text-only even when images are
+    supplied (e.g. for cost control on a specific job).
     """
     try:
         image_urls = _normalize_image_urls(images, limit=4) if images else []
-        # Respect the global vision kill-switch — fall back to text-only if disabled.
-        use_vision = bool(image_urls) and USE_GPT4O_VISION
-        if image_urls and not USE_GPT4O_VISION:
-            print("[INFO] USE_GPT4O_VISION=False — ignoring images, using text-only extraction.")
-        model = "gpt-4o" if use_vision else OPENAI_MODEL_NAME
+        # Per-request flag overrides the global default; when omitted, fall back to USE_GPT4O_VISION.
+        effective_use_vision = USE_GPT4O_VISION if use_vision is None else bool(use_vision)
+        use_vision_path = bool(image_urls) and effective_use_vision
+        if image_urls and not effective_use_vision:
+            print("[INFO] use_vision=False — ignoring images, using text-only extraction.")
+        model = "gpt-4o" if use_vision_path else OPENAI_MODEL_NAME
+        # Rename local for backwards-compat with the rest of this function body.
+        use_vision = use_vision_path
 
         if use_vision:
             user_content = []
@@ -1016,7 +1026,7 @@ def merge_with_template(template, model_output):
 
 def extract_ai_attributes(item_name, description, vendor_category, shopping_category,
                          shopping_subcategory, item_category, images=None, variant_name='',
-                         menu_category=''):
+                         menu_category='', use_vision=None):
     """
     Extract AI attributes using integrated approach:
     1. If fashion/home&garden with images: use grad model for color/material
@@ -1057,7 +1067,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
             if USE_OPENAI_FALLBACK:
                 print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
                 grad_color, grad_material, vision_confidence = predict_color_material_openai(
-                    item_name, description, item_category, image_urls
+                    item_name, description, item_category, image_urls, use_vision=use_vision
                 )
                 used_fallback = True
                 if grad_color or grad_material:
@@ -1145,7 +1155,7 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
 
     # Pass images to the main extraction call so the model can use vision for
     # color, pattern, material, fashion_type, gender, etc. — not just text hints.
-    result = run_openai_model(prompt, images=image_urls if image_urls else None)
+    result = run_openai_model(prompt, images=image_urls if image_urls else None, use_vision=use_vision)
     result = merge_with_template(template, result)
     return result, grad_data
 
@@ -1173,16 +1183,22 @@ def extract_single_item_attributes(item_data, index):
                 "grad_predictions": None
             }
 
+        # Per-item GPT-4o vision flag from the admin panel.
+        # Item-level setting wins; otherwise falls back to USE_GPT4O_VISION.
+        item_use_vision = item_data.get('use_vision', None)
+        effective_use_vision = USE_GPT4O_VISION if item_use_vision is None else bool(item_use_vision)
+
         # Determine whether GPT-4o vision will actually run for this item
         # (drives the green/red row indicator in the admin panel).
         _image_urls_norm = _normalize_image_urls(images, limit=4)
-        vision_used = USE_GPT4O_VISION and bool(_image_urls_norm)
+        vision_used = effective_use_vision and bool(_image_urls_norm)
 
         # Extract attributes
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name, menu_category=menu_category
+            images, variant_name=variant_name, menu_category=menu_category,
+            use_vision=item_use_vision
         )
 
         # Check if there's a warning from grad model
@@ -1607,16 +1623,22 @@ def extract_attributes():
                 "error": "item_name, shopping_category, and item_category are required"
             }), 400
 
+        # Per-request GPT-4o vision flag from the admin panel.
+        # Request-level setting wins; otherwise falls back to USE_GPT4O_VISION.
+        req_use_vision = data.get('use_vision', None)
+        effective_use_vision = USE_GPT4O_VISION if req_use_vision is None else bool(req_use_vision)
+
         # Determine whether GPT-4o vision will actually run for this item
         # (drives the green/red row indicator in the admin panel).
         _image_urls_norm = _normalize_image_urls(images, limit=4)
-        vision_used = USE_GPT4O_VISION and bool(_image_urls_norm)
+        vision_used = effective_use_vision and bool(_image_urls_norm)
 
         # Extract attributes
         attributes, grad_data = extract_ai_attributes(
             item_name, description, vendor_category,
             shopping_category, shopping_subcategory, item_category,
-            images, variant_name=variant_name, menu_category=menu_category
+            images, variant_name=variant_name, menu_category=menu_category,
+            use_vision=req_use_vision
         )
 
         # Check if there's a warning from grad model
@@ -1654,12 +1676,21 @@ def extract_attributes_batch():
 
         items = data.get('items', [])
         max_workers = data.get('max_workers', 3)
+        # Job-level use_vision flag from the admin panel — applies to every
+        # item that doesn't specify its own use_vision. None = use global.
+        job_use_vision = data.get('use_vision', None)
 
         if not isinstance(items, list):
             return jsonify({"error": "items must be an array"}), 400
 
         if len(items) == 0:
             return jsonify({"error": "items array cannot be empty"}), 400
+
+        # Propagate job-level use_vision into each item that doesn't override it.
+        if job_use_vision is not None:
+            for it in items:
+                if isinstance(it, dict) and 'use_vision' not in it:
+                    it['use_vision'] = bool(job_use_vision)
 
         total_items = len(items)
         print(f"\n[Batch Parallel AI Attributes] Processing {total_items} items with {max_workers} workers...")
