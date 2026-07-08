@@ -1116,6 +1116,14 @@ INSTRUCTIONS:
 - Use concise English values
 - If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
+- Size vs Measurements — DIFFERENT fields, NEVER put one in the other:
+  - Size: garment/shoe/label size ONLY. Allowed values look like: XS, S, M, L, XL, XXL, "One Size", "Free Size", numeric shoe sizes (36, 38, 42), or age sizes ("2 Years", "3 Years"). Examples: "Red - XL" -> Size: XL; "42" -> Size: 42.
+  - Measurements / Weight / Volume: numeric quantity with a UNIT — grams, kg, ml, L, oz, lb, cm, mm, inches. Examples: "120 grams" -> Measurements: 120g (NOT Size); "500ml" -> Measurements: 500ml; "1kg" -> Measurements: 1kg; "30x40cm" -> Measurements: 30x40cm.
+  - Rule of thumb: if the value has a UNIT (g/kg/ml/L/cm/mm/oz/lb/inch), it belongs in Measurements, NEVER in Size. If the value is a letter code or a shoe number, it belongs in Size.
+  - WRONG: "Matelda Chocolate Cake 120 grams" -> Size: 120 grams  ❌
+  - RIGHT: "Matelda Chocolate Cake 120 grams" -> Measurements: 120g, Size: (empty)  ✅
+  - WRONG: "Coca Cola 500ml" -> Size: 500ml  ❌
+  - RIGHT: "Coca Cola 500ml" -> Measurements: 500ml, Size: (empty)  ✅
 - Brand: the brand/manufacturer/label name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma; "Apple iPhone 17" -> Apple). A brand is a recognizable company/label name, NOT a generic descriptor, NOT a vendor/store name, NOT a marketing word. LEAVE EMPTY when:
   - The item starts with a generic descriptor, not a company (e.g. "Plain White T-Shirt" -> empty; "Fresh Tomatoes 1kg" -> empty; "Cotton Bed Sheet" -> empty; "Premium Leather Wallet" -> empty)
   - The leading word is a category/material/color (e.g. "Leather Boots" -> empty; "Silver Necklace" -> empty)
