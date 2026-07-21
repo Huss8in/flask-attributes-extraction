@@ -117,11 +117,37 @@ synonyms_map = {
     },
 # ========================================================================
     "age_filter": {
-        "2 Years": ["2", "2y", "2 yrs", "2 year", "two years"],
-        "3 Years": ["3", "3y", "3 yrs", "3 year", "three years"],
-        "4 Years": ["4", "4y", "4 yrs", "4 year", "four years"],
-        "5 Years": ["5", "5y", "5 yrs", "5 year", "five years"],
-        "6 Years": ["6", "6y", "6 yrs", "6 year", "six years"],
+        # Years
+        "1 Years":  ["1y", "1yr", "1 yr", "1 yrs", "1 year", "one year"],
+        "2 Years":  ["2y", "2yr", "2 yr", "2 yrs", "2 year", "two years"],
+        "3 Years":  ["3y", "3yr", "3 yr", "3 yrs", "3 year", "three years"],
+        "4 Years":  ["4y", "4yr", "4 yr", "4 yrs", "4 year", "four years"],
+        "5 Years":  ["5y", "5yr", "5 yr", "5 yrs", "5 year", "five years"],
+        "6 Years":  ["6y", "6yr", "6 yr", "6 yrs", "6 year", "six years"],
+        "7 Years":  ["7y", "7yr", "7 yr", "7 yrs", "7 year", "seven years"],
+        "8 Years":  ["8y", "8yr", "8 yr", "8 yrs", "8 year", "eight years"],
+        "9 Years":  ["9y", "9yr", "9 yr", "9 yrs", "9 year", "nine years"],
+        "10 Years": ["10y", "10yr", "10 yr", "10 yrs", "10 year", "ten years"],
+        "11 Years": ["11y", "11yr", "11 yr", "11 yrs", "11 year", "eleven years"],
+        "12 Years": ["12y", "12yr", "12 yr", "12 yrs", "12 year", "twelve years"],
+        "13 Years": ["13y", "13yr", "13 yrs", "13 year"],
+        "14 Years": ["14y", "14yr", "14 yrs", "14 year"],
+        # Months
+        "0 Months":  ["0m", "0mo", "0 mo", "newborn"],
+        "1 Months":  ["1m", "1mo", "1 mo", "1 month", "one month"],
+        "2 Months":  ["2m", "2mo", "2 mo", "2 month", "two months"],
+        "3 Months":  ["3m", "3mo", "3 mo", "3 month", "three months"],
+        "4 Months":  ["4m", "4mo", "4 mo", "4 month", "four months"],
+        "5 Months":  ["5m", "5mo", "5 mo", "5 month", "five months"],
+        "6 Months":  ["6m", "6mo", "6 mo", "6 month", "six months"],
+        "7 Months":  ["7m", "7mo", "7 mo", "7 month", "seven months"],
+        "8 Months":  ["8m", "8mo", "8 mo", "8 month", "eight months"],
+        "9 Months":  ["9m", "9mo", "9 mo", "9 month", "nine months"],
+        "10 Months": ["10m", "10mo", "10 mo", "10 month", "ten months"],
+        "11 Months": ["11m", "11mo", "11 mo", "11 month", "eleven months"],
+        "12 Months": ["12m", "12mo", "12 mo", "12 month", "twelve months", "1 year old"],
+        "18 Months": ["18m", "18mo", "18 mo", "18 month"],
+        "24 Months": ["24m", "24mo", "24 mo", "24 month"],
     },
 # ========================================================================
     "pattern": {
@@ -269,3 +295,7 @@ synonyms_map = {
     },
 # ========================================================================
 }
+
+# Alias: templates use the plain "Age" field name (not "Age Filter"),
+# so mirror the age_filter synonyms under the "age" key too.
+synonyms_map["age"] = synonyms_map["age_filter"]

@@ -1114,16 +1114,22 @@ Leave unknown attributes empty.
 INSTRUCTIONS:
 - Fill only known attributes; leave others empty
 - Use concise English values
+- FINAL SELF-CHECK before returning: (1) Product Name is EMPTY unless a real brand+model exists and it is strictly shorter than Item Name; (2) Features contains NO values that belong in Color/Size/Material/Pattern/Brand/Gender/Fashion Type; (3) any value with a unit (g/kg/ml/L/cm) is in Measurements NOT Size; (4) any age variant (Ny, Nm, Nmo, N years, N months) is in Age NOT Size. If ANY of these fail, fix it before outputting.
 - If product images are attached, analyze them carefully — they are the strongest signal for Color, Pattern, Material, Fashion Type, Gender, and other visual attributes. Prefer what you see in the images over what the description claims when they disagree.
 - Variant Name often encodes size, color, or other variant-specific info (e.g. "Red - XL", "500ml / Blue"). Parse it carefully to extract Size, Color, and any other relevant attributes it contains.
-- Size vs Measurements — DIFFERENT fields, NEVER put one in the other:
-  - Size: garment/shoe/label size ONLY. Allowed values look like: XS, S, M, L, XL, XXL, "One Size", "Free Size", numeric shoe sizes (36, 38, 42), or age sizes ("2 Years", "3 Years"). Examples: "Red - XL" -> Size: XL; "42" -> Size: 42.
-  - Measurements / Weight / Volume: numeric quantity with a UNIT — grams, kg, ml, L, oz, lb, cm, mm, inches. Examples: "120 grams" -> Measurements: 120g (NOT Size); "500ml" -> Measurements: 500ml; "1kg" -> Measurements: 1kg; "30x40cm" -> Measurements: 30x40cm.
-  - Rule of thumb: if the value has a UNIT (g/kg/ml/L/cm/mm/oz/lb/inch), it belongs in Measurements, NEVER in Size. If the value is a letter code or a shoe number, it belongs in Size.
-  - WRONG: "Matelda Chocolate Cake 120 grams" -> Size: 120 grams  ❌
-  - RIGHT: "Matelda Chocolate Cake 120 grams" -> Measurements: 120g, Size: (empty)  ✅
-  - WRONG: "Coca Cola 500ml" -> Size: 500ml  ❌
-  - RIGHT: "Coca Cola 500ml" -> Measurements: 500ml, Size: (empty)  ✅
+- Size vs Age vs Measurements — THREE DIFFERENT fields. A value belongs in EXACTLY ONE of them. Look at the value's format to decide:
+  * Size — ONLY garment/shoe/label sizes: XS, S, M, L, XL, XXL, "One Size", "Free Size", or numeric shoe sizes (36, 38, 42). Example: variant "Red - XL" -> Size: XL. NEVER put an age or a value-with-units here.
+  * Age — kids' age variants. If the Variant Name / Item Name contains a number followed by y / yr / yrs / year / years / m / mo / mos / month / months (e.g. "4y", "5m", "6 years", "18 months"), it is an AGE, NOT a Size. Expand shorthand: "4y" -> "4 Years"; "18m" -> "18 Months"; "3 yrs" -> "3 Years"; "6mo" -> "6 Months". If the template has an "Age" or "Age Filter" field, put it there. NEVER put age values in Size.
+    - WRONG: variant "4y" -> Size: 4y  ❌
+    - RIGHT: variant "4y" -> Age: 4 Years, Size: (empty)  ✅
+    - WRONG: variant "5m" -> Size: 5m  ❌
+    - RIGHT: variant "5m" -> Age: 5 Months, Size: (empty)  ✅
+  * Measurements / Weight / Volume — numeric quantity with a UNIT: g, kg, ml, L, oz, lb, cm, mm, inches. If the value has a UNIT (other than an age unit above), it belongs in Measurements, NEVER in Size.
+    - WRONG: "Chocolate Cake 120 grams" -> Size: 120 grams  ❌
+    - RIGHT: "Chocolate Cake 120 grams" -> Measurements: 120g, Size: (empty)  ✅
+    - WRONG: "Coca Cola 500ml" -> Size: 500ml  ❌
+    - RIGHT: "Coca Cola 500ml" -> Measurements: 500ml, Size: (empty)  ✅
+  Decision rule: units → Measurements. Age units (y/m/mo/yr/year/month) → Age. Letter codes or plain shoe numbers → Size. If none apply, leave Size EMPTY.
 - Brand: the brand/manufacturer/label name — usually the leading proper-noun word(s) of the Item Name (e.g. "Astonish Premium Starch Spray" -> Astonish; "White Magic Jumbo Kitchen Rolls" -> White Magic; "Tescoma Meat Fork Presto" -> Tescoma; "Apple iPhone 17" -> Apple). A brand is a recognizable company/label name, NOT a generic descriptor, NOT a vendor/store name, NOT a marketing word. LEAVE EMPTY when:
   - The item starts with a generic descriptor, not a company (e.g. "Plain White T-Shirt" -> empty; "Fresh Tomatoes 1kg" -> empty; "Cotton Bed Sheet" -> empty; "Premium Leather Wallet" -> empty)
   - The leading word is a category/material/color (e.g. "Leather Boots" -> empty; "Silver Necklace" -> empty)

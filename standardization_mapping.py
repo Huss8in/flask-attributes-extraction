@@ -19,7 +19,16 @@ color = [
 size = ["XS", "S", "M", "L", "XL", "XXL", "One Size", "Free Size"]
 # ------------------------------------------------------------------------------------------------------------------------------ #
 # Age Filter
-age_filter = ["2 Years", "3 Years", "4 Years", "5 Years", "6 Years"]
+age_filter = [
+    # Months (baby / toddler)
+    "0 Months", "1 Months", "2 Months", "3 Months", "4 Months", "5 Months",
+    "6 Months", "7 Months", "8 Months", "9 Months", "10 Months", "11 Months",
+    "12 Months", "18 Months", "24 Months",
+    # Years
+    "1 Years", "2 Years", "3 Years", "4 Years", "5 Years",
+    "6 Years", "7 Years", "8 Years", "9 Years", "10 Years",
+    "11 Years", "12 Years", "13 Years", "14 Years",
+]
 # ------------------------------------------------------------------------------------------------------------------------------ #
 # Pattern
 pattern = [
@@ -81,6 +90,7 @@ standardization_map = {
     "color": color,
     "size": size,
     "age_filter": age_filter,
+    "age": age_filter,  # alias — templates use the plain "Age" field name
     "pattern": pattern,
     "fashion_type": fashion_type,
     "material": material,
