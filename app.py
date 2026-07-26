@@ -1171,7 +1171,112 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     # color, pattern, material, fashion_type, gender, etc. — not just text hints.
     result = run_openai_model(prompt, images=image_urls if image_urls else None, use_vision=use_vision)
     result = merge_with_template(template, result)
+    # Hardcoded safety net: no matter what the model returned, move age
+    # patterns out of Size and into Age (fixes the 100% "4y in Size" bug).
+    result = _postprocess_age_in_size(result)
+    # Second safety net: strip Color/Size/Material/Gender values from Features
+    # if the model dumped them there (fixes the 40% overflow bug).
+    result = _postprocess_features_overflow(result)
     return result, grad_data
+
+
+# --- Hardcoded post-processing helpers ---------------------------------------
+
+# Matches age shorthand: "4y", "4 y", "4yr", "4 yrs", "4 year", "4 years",
+# "5m", "5mo", "5 mo", "5 month", "5 months" (case-insensitive).
+_AGE_PATTERN = re.compile(
+    r'^\s*(\d{1,2})\s*(y|yr|yrs|year|years|m|mo|mos|month|months)\s*$',
+    re.IGNORECASE,
+)
+
+
+def _canonicalize_age(raw_value):
+    """Turn "4y" / "5m" / "18 months" / "3 yrs" into "4 Years" / "5 Months".
+    Returns the canonical string, or None if the value isn't an age shorthand.
+    """
+    if not raw_value:
+        return None
+    m = _AGE_PATTERN.match(raw_value.strip())
+    if not m:
+        return None
+    n, unit = m.group(1), m.group(2).lower()
+    if unit in ('m', 'mo', 'mos', 'month', 'months'):
+        return f"{int(n)} Months"
+    return f"{int(n)} Years"
+
+
+def _postprocess_age_in_size(text):
+    """If Size holds an age value, move it to Age (or Age Filter) and clear Size.
+    Deterministic post-processing that runs after the LLM — cheaper and more
+    reliable than prompting alone for this 100% recurring bug.
+    """
+    if not text or 'size:' not in text.lower():
+        return text
+    lines = text.split('\n')
+    # Locate Size and Age lines (case-insensitive on the key)
+    size_idx = None
+    age_idx = None
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key = line.split(':', 1)[0].strip().lower()
+        if key == 'size' and size_idx is None:
+            size_idx = i
+        elif key in ('age', 'age filter') and age_idx is None:
+            age_idx = i
+    if size_idx is None:
+        return text
+    size_key, _, size_val = lines[size_idx].partition(':')
+    canonical_age = _canonicalize_age(size_val)
+    if canonical_age is None:
+        return text
+    # Clear Size, place age in the Age line if the template has one
+    lines[size_idx] = f"{size_key.strip()}:"
+    if age_idx is not None:
+        age_key, _, existing_age = lines[age_idx].partition(':')
+        if not existing_age.strip():
+            lines[age_idx] = f"{age_key.strip()}: {canonical_age}"
+    return '\n'.join(lines)
+
+
+# Vocabularies that MUST NOT appear inside Features — they belong in their own
+# dedicated fields. Kept lowercase for case-insensitive membership checks.
+_FEATURES_STOPWORDS = set()
+try:
+    from standardization_mapping import color as _std_color, size as _std_size, gender as _std_gender
+    from standardization_mapping import pattern as _std_pattern, material as _std_material
+    from standardization_mapping import fashion_type as _std_fashion_type
+    for _lst in (_std_color, _std_size, _std_gender, _std_pattern, _std_material, _std_fashion_type):
+        for _v in _lst:
+            _FEATURES_STOPWORDS.add(_v.strip().lower())
+except Exception:
+    pass  # If import fails, the post-processor becomes a no-op.
+
+
+def _postprocess_features_overflow(text):
+    """Drop tokens from Features that clearly belong to Color/Size/Material/
+    Pattern/Gender/Fashion Type. Splits on commas and keeps only tokens whose
+    lowercased value is NOT in the stopword vocabulary.
+    """
+    if not text or 'features:' not in text.lower() or not _FEATURES_STOPWORDS:
+        return text
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        if key.strip().lower() != 'features':
+            continue
+        val = val.strip()
+        if not val:
+            continue
+        tokens = [t.strip() for t in val.split(',') if t.strip()]
+        kept = [t for t in tokens if t.lower() not in _FEATURES_STOPWORDS]
+        # Only rewrite if we actually dropped something
+        if len(kept) != len(tokens):
+            lines[i] = f"{key.strip()}: {', '.join(kept)}" if kept else f"{key.strip()}:"
+        break
+    return '\n'.join(lines)
 
 
 def extract_single_item_attributes(item_data, index):
