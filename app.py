@@ -1174,9 +1174,10 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     # Hardcoded safety net: no matter what the model returned, move age
     # patterns out of Size and into Age (fixes the 100% "4y in Size" bug).
     result = _postprocess_age_in_size(result)
-    # Second safety net: strip Color/Size/Material/Gender values from Features
-    # if the model dumped them there (fixes the 40% overflow bug).
-    result = _postprocess_features_overflow(result)
+    # Second safety net: enforce the predefined Features whitelist. Anything
+    # not in the whitelist (including Color/Size/Material/Gender leakage) is
+    # dropped; survivors are canonicalized.
+    result = _postprocess_features_whitelist(result)
     return result, grad_data
 
 
@@ -1241,24 +1242,35 @@ def _postprocess_age_in_size(text):
 
 # Vocabularies that MUST NOT appear inside Features — they belong in their own
 # dedicated fields. Kept lowercase for case-insensitive membership checks.
-_FEATURES_STOPWORDS = set()
+# Predefined whitelist of allowed Features values (canonical + synonyms).
+# Anything the model returns that is NOT in this map gets dropped. This is
+# stricter than the previous stopword approach and gives us canonical output.
+# Map shape: {lowercase_input: canonical_output}
+_FEATURES_WHITELIST = {}
 try:
-    from standardization_mapping import color as _std_color, size as _std_size, gender as _std_gender
-    from standardization_mapping import pattern as _std_pattern, material as _std_material
-    from standardization_mapping import fashion_type as _std_fashion_type
-    for _lst in (_std_color, _std_size, _std_gender, _std_pattern, _std_material, _std_fashion_type):
-        for _v in _lst:
-            _FEATURES_STOPWORDS.add(_v.strip().lower())
+    from standardization_mapping import feature as _std_feature
+    for _v in _std_feature:
+        _FEATURES_WHITELIST[_v.strip().lower()] = _v
+    # Merge in feature synonyms so common aliases resolve to canonical.
+    from standardization_synonyms import synonyms_map as _syn_map
+    for _canonical, _syns in _syn_map.get("feature", {}).items():
+        for _s in _syns:
+            _FEATURES_WHITELIST.setdefault(_s.strip().lower(), _canonical)
+        _FEATURES_WHITELIST.setdefault(_canonical.strip().lower(), _canonical)
 except Exception:
     pass  # If import fails, the post-processor becomes a no-op.
 
 
-def _postprocess_features_overflow(text):
-    """Drop tokens from Features that clearly belong to Color/Size/Material/
-    Pattern/Gender/Fashion Type. Splits on commas and keeps only tokens whose
-    lowercased value is NOT in the stopword vocabulary.
+def _postprocess_features_whitelist(text):
+    """Enforce the Features whitelist.
+
+    Splits the Features value on commas, keeps only tokens whose lowercased
+    form is present in the whitelist, and rewrites them in their canonical
+    form. Everything else (including values that overlap with Color, Size,
+    Material, etc. — since those are not in the features whitelist) is
+    dropped. Leaves Features empty if nothing survives.
     """
-    if not text or 'features:' not in text.lower() or not _FEATURES_STOPWORDS:
+    if not text or 'features:' not in text.lower() or not _FEATURES_WHITELIST:
         return text
     lines = text.split('\n')
     for i, line in enumerate(lines):
@@ -1271,12 +1283,58 @@ def _postprocess_features_overflow(text):
         if not val:
             continue
         tokens = [t.strip() for t in val.split(',') if t.strip()]
-        kept = [t for t in tokens if t.lower() not in _FEATURES_STOPWORDS]
-        # Only rewrite if we actually dropped something
-        if len(kept) != len(tokens):
-            lines[i] = f"{key.strip()}: {', '.join(kept)}" if kept else f"{key.strip()}:"
+        # Canonicalize + dedupe while preserving order.
+        seen = set()
+        kept = []
+        for t in tokens:
+            canon = _FEATURES_WHITELIST.get(t.lower())
+            if canon and canon not in seen:
+                seen.add(canon)
+                kept.append(canon)
+        lines[i] = f"{key.strip()}: {', '.join(kept)}" if kept else f"{key.strip()}:"
         break
     return '\n'.join(lines)
+
+
+# Fields that identify the product itself, not properties to filter by.
+_NON_FILTER_FIELDS = {
+    "product name", "generic name", "description", "item name", "vendor category",
+    "shopping category", "shopping subcategory", "item category", "menu category",
+    "variant name", "country of origin",
+}
+
+
+def build_filters_from_attributes(ai_attributes_text):
+    """Turn the AI attribute output into a dynamic filter dict.
+
+    Input:  newline-separated "Key: Value" (possibly with comma-separated
+            multi-values, e.g. "Features: Waterproof, Lightweight").
+    Output: {attribute_name: [value, value, ...]} for every non-empty field
+            EXCEPT identifying/meta fields (Product Name, Generic Name, ...).
+
+    Examples:
+        "Gender: Women\\nSize: 46"        -> {"Gender": ["Women"], "Size": ["46"]}
+        "Color: Blue\\nFeatures: Waterproof, Lightweight"
+                                         -> {"Color": ["Blue"], "Features": ["Waterproof", "Lightweight"]}
+    """
+    filters = {}
+    if not ai_attributes_text:
+        return filters
+    for line in ai_attributes_text.split('\n'):
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        key = key.strip()
+        val = val.strip()
+        if not key or not val:
+            continue
+        if key.lower() in _NON_FILTER_FIELDS:
+            continue
+        # Split comma-separated multi-values (Features, Season, etc.)
+        values = [v.strip() for v in val.split(',') if v.strip()]
+        if values:
+            filters[key] = values
+    return filters
 
 
 def extract_single_item_attributes(item_data, index):
@@ -1337,7 +1395,10 @@ def extract_single_item_attributes(item_data, index):
             # "model_used": canonical model name actually invoked for this item.
             "vision_used": vision_used,
             "model_used": "gpt-4o" if vision_used else OPENAI_MODEL_NAME,
-            "vision_status": "green" if vision_used else "red"
+            "vision_status": "green" if vision_used else "red",
+            # Dynamic filter list generated from the final AI attributes.
+            # Shape: {"Gender": ["Women"], "Size": ["46"], "Color": ["Blue"], ...}
+            "filters": build_filters_from_attributes(attributes)
         }
 
         return index, result
@@ -1776,7 +1837,10 @@ def extract_attributes():
             # GPT-4o vision indicator (green dot if True, red dot if False).
             "vision_used": vision_used,
             "model_used": "gpt-4o" if vision_used else OPENAI_MODEL_NAME,
-            "vision_status": "green" if vision_used else "red"
+            "vision_status": "green" if vision_used else "red",
+            # Dynamic filter list generated from the final AI attributes.
+            # Shape: {"Gender": ["Women"], "Size": ["46"], "Color": ["Blue"], ...}
+            "filters": build_filters_from_attributes(attributes)
         }), 200
 
     except Exception as e:
