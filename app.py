@@ -1178,6 +1178,12 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     # not in the whitelist (including Color/Size/Material/Gender leakage) is
     # dropped; survivors are canonicalized.
     result = _postprocess_features_whitelist(result)
+    # Category-specific hardcoded rules:
+    #  1) Home & Garden products don't have a Gender — clear it.
+    #  2) Beauty products (shampoo, perfume, etc.): volume/weight IS the size
+    #     (e.g. 500ml, 1L, 250g). Populate Size from item_name / variant_name.
+    result = _postprocess_home_garden_no_gender(result, shopping_category)
+    result = _postprocess_beauty_volume_as_size(result, shopping_category, item_name, variant_name)
     return result, grad_data
 
 
@@ -1294,6 +1300,97 @@ def _postprocess_features_whitelist(text):
         lines[i] = f"{key.strip()}: {', '.join(kept)}" if kept else f"{key.strip()}:"
         break
     return '\n'.join(lines)
+
+
+# Categories that never carry a gender on the product (kitchenware, cleaners,
+# furniture, decor, etc.). Kept lowercased.
+_NO_GENDER_CATEGORIES = {"home and garden", "home_and_garden"}
+
+# Categories where the "size" of the product is a volume or weight (shampoo
+# 500ml, perfume 100ml, cream 250g, etc.) — not a garment size.
+_VOLUME_AS_SIZE_CATEGORIES = {"beauty"}
+
+# Regex for volume/weight units common on beauty products.
+# Matches: "500ml", "1L", "250g", "1kg", "3.4 fl oz", "1 litre", "50 ml"
+_VOLUME_PATTERN = re.compile(
+    r'(\d+(?:\.\d+)?)\s*(ml|l|litre|liter|litres|liters|g|gm|kg|oz|fl\s*oz)\b',
+    re.IGNORECASE,
+)
+
+
+def _postprocess_home_garden_no_gender(text, shopping_category):
+    """Home & garden products (kitchenware, decor, appliances, etc.) never
+    carry a Gender — force the Gender field to empty regardless of what the
+    model returned.
+    """
+    if not text or not shopping_category:
+        return text
+    if shopping_category.strip().lower() not in _NO_GENDER_CATEGORIES:
+        return text
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key, _, _val = line.partition(':')
+        if key.strip().lower() == 'gender':
+            lines[i] = f"{key.strip()}:"
+            break
+    return '\n'.join(lines)
+
+
+def _canonicalize_volume(number_str, unit):
+    """Return a consistent Size string like "500ml" / "1L" / "250g"."""
+    unit = unit.lower().replace(' ', '')
+    # Trim trailing .0 for a cleaner display
+    try:
+        n = float(number_str)
+        num = str(int(n)) if n.is_integer() else str(n)
+    except ValueError:
+        num = number_str
+    if unit in ('l', 'litre', 'liter', 'litres', 'liters'):
+        return f"{num}L"
+    if unit == 'floz':
+        return f"{num} fl oz"
+    if unit == 'gm':
+        return f"{num}g"
+    return f"{num}{unit}"
+
+
+def _postprocess_beauty_volume_as_size(text, shopping_category, item_name, variant_name):
+    """For beauty products, the "size" is a volume/weight (e.g. shampoo 500ml,
+    perfume 100ml). If Size is empty in the model output, extract the volume
+    from variant_name first, else item_name, and put it in Size.
+    """
+    if not text or not shopping_category:
+        return text
+    if shopping_category.strip().lower() not in _VOLUME_AS_SIZE_CATEGORIES:
+        return text
+    lines = text.split('\n')
+    # Locate the Size line
+    size_idx = None
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        if key.strip().lower() == 'size':
+            size_idx = i
+            # If Size already has a real value, don't overwrite it.
+            if val.strip():
+                return text
+            break
+    if size_idx is None:
+        return text
+    # Search variant_name first, then item_name
+    for source in (variant_name, item_name):
+        if not source:
+            continue
+        m = _VOLUME_PATTERN.search(source)
+        if m:
+            canonical = _canonicalize_volume(m.group(1), m.group(2))
+            size_key = lines[size_idx].split(':', 1)[0].strip()
+            lines[size_idx] = f"{size_key}: {canonical}"
+            return '\n'.join(lines)
+    return text
 
 
 # Fields that identify the product itself, not properties to filter by.
