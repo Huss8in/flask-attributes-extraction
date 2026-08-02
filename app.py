@@ -1184,6 +1184,9 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     #     (e.g. 500ml, 1L, 250g). Populate Size from item_name / variant_name.
     result = _postprocess_home_garden_no_gender(result, shopping_category)
     result = _postprocess_beauty_volume_as_size(result, shopping_category, item_name, variant_name)
+    # Third safety net: if Product Name == Item Name (after normalization),
+    # clear it. Fixes the 60% "PN copied from IN" bug flagged by data entry.
+    result = _postprocess_product_name_dedup(result, item_name)
     return result, grad_data
 
 
@@ -1391,6 +1394,57 @@ def _postprocess_beauty_volume_as_size(text, shopping_category, item_name, varia
             lines[size_idx] = f"{size_key}: {canonical}"
             return '\n'.join(lines)
     return text
+
+
+# Regexes for the Product-Name-dedup post-processor.
+_PN_WS_RE = re.compile(r'\s+')
+_PN_PUNCT_STRIP_RE = re.compile(r'[^\w\s]')
+
+
+def _normalize_for_pn_match(s):
+    """Lowercase, strip punctuation, collapse whitespace — for comparing
+    Product Name to Item Name loosely."""
+    if not s:
+        return ''
+    s = s.lower().strip()
+    s = _PN_PUNCT_STRIP_RE.sub(' ', s)
+    s = _PN_WS_RE.sub(' ', s).strip()
+    return s
+
+
+def _postprocess_product_name_dedup(text, item_name):
+    """If Product Name is (effectively) the same string as the Item Name,
+    clear it. The prompt asks the model to leave PN empty in that case, but
+    the data-entry team reports the model still copies it 60% of the time —
+    this hardcoded rule enforces the intent no matter what the model does.
+
+    "Effectively the same" means the two strings normalize to the same value
+    after lowercasing, stripping punctuation, and collapsing whitespace. This
+    also catches cases like PN="iPhone 17 (256GB)" vs IN="iPhone 17 256GB",
+    which are essentially identical.
+    """
+    if not text or not item_name or 'product name:' not in text.lower():
+        return text
+    norm_item = _normalize_for_pn_match(item_name)
+    if not norm_item:
+        return text
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        if key.strip().lower() != 'product name':
+            continue
+        val = val.strip()
+        if not val:
+            return text  # already empty, nothing to do
+        norm_pn = _normalize_for_pn_match(val)
+        # Clear when PN duplicates the Item Name — either exactly, or when
+        # PN is not strictly shorter (prompt requires PN < IN in length).
+        if norm_pn == norm_item or len(norm_pn) >= len(norm_item):
+            lines[i] = f"{key.strip()}:"
+        break
+    return '\n'.join(lines)
 
 
 # Fields that identify the product itself, not properties to filter by.
