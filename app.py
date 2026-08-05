@@ -1432,6 +1432,9 @@ _PN_MEASUREMENT_TAIL_RE = re.compile(
     r'watts?|watt|volts?|volt|amps?|amp|'
     # Packaging
     r'packs?|pack|pieces?|piece|counts?|count|sheets?|sheet|plies|ply|'
+    # Time / battery / display (skip year/month — Age post-processor owns those)
+    r'hours?|hour|hrs?|hr|minutes?|minute|mins?|min|seconds?|second|secs?|sec|'
+    r'days?|day|mah|ppi|dpi|'
     # Short abbreviations
     r'kg|gm|mg|ml|kb|mb|gb|tb|kw|khz|mhz|ghz|hz|'
     r'cm|mm|oz|lb|lbs|pcs|pc|ct|'
