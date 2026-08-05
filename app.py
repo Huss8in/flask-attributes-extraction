@@ -1405,14 +1405,38 @@ _PN_PUNCT_STRIP_RE = re.compile(r'[^\w\s]')
 # etc.), the model's trim was legitimate (e.g. "Chocolate Cake 120 grams" ->
 # "Chocolate Cake"). Otherwise the tail is just a variant/shade/color and
 # the trim didn't add value, so PN should be cleared.
+# Longest-first alternation so plural/spelled-out forms match before their
+# short abbreviations (regex alternation is greedy left-to-right).
 _PN_MEASUREMENT_TAIL_RE = re.compile(
-    r'\b\d+(?:\.\d+)?\s*'
-    r'(g|gm|mg|kg|ml|l|litre|liter|litres|liters|'
-    r'oz|lb|lbs|'
-    r'cm|mm|m|inch|inches|in|ft|feet|'
-    r'gb|tb|mb|kb|'
-    r'w|kw|watt|watts|volt|volts|amp|amps|hz|khz|mhz|ghz|'
-    r'pack|pcs|piece|pieces|count|ct|ply|sheet|sheets)\b',
+    r'\b\d+(?:\.\d+)?\s*(?:'
+    # Mass
+    r'kilograms?|kilogram|kilos?|kilo|'
+    r'milligrams?|milligram|'
+    r'grams?|gram|'
+    r'ounces?|ounce|'
+    r'pounds?|pound|'
+    # Volume
+    r'milliliters?|milliliter|'
+    r'litres?|liters?|litre|liter|'
+    r'fl\s*oz|'
+    # Length
+    r'centimeters?|centimeter|'
+    r'millimeters?|millimeter|'
+    r'meters?|meter|'
+    r'inches|inch|'
+    r'feet|foot|'
+    # Storage
+    r'kilobytes?|megabytes?|gigabytes?|terabytes?|'
+    # Electrical
+    r'kilohertz|megahertz|gigahertz|'
+    r'watts?|watt|volts?|volt|amps?|amp|'
+    # Packaging
+    r'packs?|pack|pieces?|piece|counts?|count|sheets?|sheet|plies|ply|'
+    # Short abbreviations
+    r'kg|gm|mg|ml|kb|mb|gb|tb|kw|khz|mhz|ghz|hz|'
+    r'cm|mm|oz|lb|lbs|pcs|pc|ct|'
+    r'g|l|w|v'
+    r')\b',
     re.IGNORECASE,
 )
 
