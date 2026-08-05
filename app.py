@@ -1186,7 +1186,7 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     result = _postprocess_beauty_volume_as_size(result, shopping_category, item_name, variant_name)
     # Third safety net: if Product Name == Item Name (after normalization),
     # clear it. Fixes the 60% "PN copied from IN" bug flagged by data entry.
-    result = _postprocess_product_name_dedup(result, item_name)
+    result = _postprocess_product_name_dedup(result, item_name, variant_name)
     return result, grad_data
 
 
@@ -1400,6 +1400,22 @@ def _postprocess_beauty_volume_as_size(text, shopping_category, item_name, varia
 _PN_WS_RE = re.compile(r'\s+')
 _PN_PUNCT_STRIP_RE = re.compile(r'[^\w\s]')
 
+# A "meaningful" tail — if what got stripped off IN to produce PN contains
+# a real measurement/quantity/tech-spec (grams, ml, GB, cm, pack, count, W,
+# etc.), the model's trim was legitimate (e.g. "Chocolate Cake 120 grams" ->
+# "Chocolate Cake"). Otherwise the tail is just a variant/shade/color and
+# the trim didn't add value, so PN should be cleared.
+_PN_MEASUREMENT_TAIL_RE = re.compile(
+    r'\b\d+(?:\.\d+)?\s*'
+    r'(g|gm|mg|kg|ml|l|litre|liter|litres|liters|'
+    r'oz|lb|lbs|'
+    r'cm|mm|m|inch|inches|in|ft|feet|'
+    r'gb|tb|mb|kb|'
+    r'w|kw|watt|watts|volt|volts|amp|amps|hz|khz|mhz|ghz|'
+    r'pack|pcs|piece|pieces|count|ct|ply|sheet|sheets)\b',
+    re.IGNORECASE,
+)
+
 
 def _normalize_for_pn_match(s):
     """Lowercase, strip punctuation, collapse whitespace — for comparing
@@ -1412,16 +1428,25 @@ def _normalize_for_pn_match(s):
     return s
 
 
-def _postprocess_product_name_dedup(text, item_name):
-    """If Product Name is (effectively) the same string as the Item Name,
-    clear it. The prompt asks the model to leave PN empty in that case, but
-    the data-entry team reports the model still copies it 60% of the time —
-    this hardcoded rule enforces the intent no matter what the model does.
+def _postprocess_product_name_dedup(text, item_name, variant_name=''):
+    """Clear Product Name when it's effectively the Item Name.
 
-    "Effectively the same" means the two strings normalize to the same value
-    after lowercasing, stripping punctuation, and collapsing whitespace. This
-    also catches cases like PN="iPhone 17 (256GB)" vs IN="iPhone 17 256GB",
-    which are essentially identical.
+    Three cases trigger a clear (from most specific to most general):
+
+    1. Exact / not-shorter — normalized(PN) == normalized(IN), or PN isn't
+       shorter than IN.
+
+    2. Variant-strip only — PN equals IN with the vendor-supplied variant
+       removed. Example:
+         IN = "Huda Beauty FauxFilter Concealer - Sugar 3.5N"
+         variant = "Sugar 3.5N"
+         PN = "Huda Beauty FauxFilter Concealer"   -> clear (model added nothing)
+
+    3. Prefix without measurement tail — PN is a prefix of IN, and the
+       stripped tail contains NO measurement/quantity marker (grams, ml,
+       GB, pack, etc.). Fires when the model just chopped a trailing
+       shade/color/variant. Preserves cases like "Matelda Chocolate Cake
+       120 grams" -> "Matelda Chocolate Cake" (tail "120 grams" has a unit).
     """
     if not text or not item_name or 'product name:' not in text.lower():
         return text
@@ -1439,9 +1464,30 @@ def _postprocess_product_name_dedup(text, item_name):
         if not val:
             return text  # already empty, nothing to do
         norm_pn = _normalize_for_pn_match(val)
-        # Clear when PN duplicates the Item Name — either exactly, or when
-        # PN is not strictly shorter (prompt requires PN < IN in length).
+        should_clear = False
+
+        # Case 1: exact match or PN not shorter than IN
         if norm_pn == norm_item or len(norm_pn) >= len(norm_item):
+            should_clear = True
+
+        # Case 2: PN equals IN with the variant removed
+        if not should_clear and variant_name:
+            norm_var = _normalize_for_pn_match(variant_name)
+            if norm_var:
+                without_variant = _PN_WS_RE.sub(
+                    ' ', norm_item.replace(norm_var, ' ')
+                ).strip()
+                if norm_pn == without_variant:
+                    should_clear = True
+
+        # Case 3: PN is a strict prefix of IN AND the stripped tail is
+        # NOT a measurement/quantity (i.e., it's a variant/shade/color)
+        if not should_clear and norm_pn and norm_item.startswith(norm_pn + ' '):
+            stripped_tail = norm_item[len(norm_pn):].strip()
+            if stripped_tail and not _PN_MEASUREMENT_TAIL_RE.search(stripped_tail):
+                should_clear = True
+
+        if should_clear:
             lines[i] = f"{key.strip()}:"
         break
     return '\n'.join(lines)
