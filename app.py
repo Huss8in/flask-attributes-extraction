@@ -170,6 +170,35 @@ def _grammar_correct(tool, text):
     return corrected, kept
 
 
+def _grammar_process(tool, raw_text):
+    """Clean + grammar-correct one text and report whether anything changed.
+    has_changes is True when grammar changed the text OR markup/entities were
+    stripped (so an HTML-only description is not reported as 'no corrections
+    needed' while it still shows raw tags in the Item Description column)."""
+    if not raw_text:
+        return {
+            "original_text": "", "corrected_text": "", "has_changes": False,
+            "changes_summary": "No text provided", "errors_found": 0,
+        }
+    cleaned = _clean_text_for_grammar(raw_text)
+    if not cleaned:
+        return {
+            "original_text": raw_text, "corrected_text": "", "has_changes": False,
+            "changes_summary": "No text provided", "errors_found": 0,
+        }
+    corrected, kept = _grammar_correct(tool, cleaned)
+    # Markup/entity removal counts as a change (ignore whitespace-only diffs).
+    stripped_markup = re.sub(r'\s+', '', raw_text) != re.sub(r'\s+', '', cleaned)
+    has_changes = stripped_markup or (cleaned != corrected)
+    return {
+        "original_text": raw_text,
+        "corrected_text": corrected,
+        "has_changes": has_changes,
+        "changes_summary": (f"Changed from '{raw_text}' to '{corrected}'" if has_changes else "No changes"),
+        "errors_found": len(kept),
+    }
+
+
 def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
     """POST to the OpenAI API with retry + backoff on 429 (rate limit) and 5xx
     errors. Respects the Retry-After header / "try again in Xs" hint when present,
@@ -2957,51 +2986,12 @@ def grammar_check():
             # Batch processing
             results = []
             for item in data:
-                original_text = _clean_text_for_grammar(item.get("text", ""))
-                if not original_text:
-                    results.append({
-                        "original_text": "",
-                        "corrected_text": "",
-                        "has_changes": False,
-                        "changes_summary": "No text provided"
-                    })
-                    continue
-
-                # Correct grammar/punctuation/casing only (never spelling).
-                corrected_text, kept = _grammar_correct(tool, original_text)
-
-                results.append({
-                    "original_text": original_text,
-                    "corrected_text": corrected_text,
-                    "has_changes": original_text != corrected_text,
-                    "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
-                    "errors_found": len(kept)
-                })
+                results.append(_grammar_process(tool, item.get("text", "")))
 
             return jsonify(results), 200
         else:
             # Single processing
-            original_text = _clean_text_for_grammar(data.get("text", ""))
-
-            if not original_text:
-                return jsonify({
-                    "original_text": "",
-                    "corrected_text": "",
-                    "has_changes": False,
-                    "changes_summary": "No text provided",
-                    "errors_found": 0
-                }), 200
-
-            # Correct grammar/punctuation/casing only (never spelling).
-            corrected_text, kept = _grammar_correct(tool, original_text)
-
-            return jsonify({
-                "original_text": original_text,
-                "corrected_text": corrected_text,
-                "has_changes": original_text != corrected_text,
-                "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
-                "errors_found": len(kept)
-            }), 200
+            return jsonify(_grammar_process(tool, data.get("text", ""))), 200
 
     except Exception as e:
         return jsonify({
