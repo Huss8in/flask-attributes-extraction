@@ -125,15 +125,34 @@ _SPELLING_RULE_IDS = {'MORFOLOGIK_RULE_EN_US', 'MORFOLOGIK_RULE_EN', 'HUNSPELL_R
 _SPELLING_CATEGORIES = {'TYPOS'}
 
 
+# HTML tag names that frequently survive as literal words when markup lost its
+# angle brackets upstream (e.g. "<strong>...</strong>" -> "strong ... /strong").
+# Only unambiguous, HTML-only tokens — no real English words (kept out: "small",
+# "table", single letters b/i/u/p/a) — so prose is never damaged.
+_TAG_WORD_RE = re.compile(
+    r'(?<![A-Za-z0-9])/?'
+    r'(?:strong|blockquote|thead|tbody|span|div|nbsp|br|hr|ul|ol|li|td|tr|th)'
+    r'(?![A-Za-z0-9])',
+    re.IGNORECASE,
+)
+
+
 def _clean_text_for_grammar(text):
-    """Decode HTML entities and strip HTML tags so markup (<strong>, <br>,
-    &mdash;, &rsquo;) is not fed to the grammar checker (which would otherwise
-    mangle it, e.g. capitalize 'Strong'/'BR')."""
+    """Decode HTML entities and strip HTML markup so it is not fed to the grammar
+    checker (which would otherwise mangle it, e.g. capitalize 'Strong'/'BR').
+    Removes real tags (<strong>, <br>), leftover tag-name words that lost their
+    angle brackets ("strong", "/strong", "br", "nbsp"), and decodes entities."""
     if not text:
         return text
     t = html.unescape(text)             # &mdash; &rsquo; &amp; -> real characters
-    t = re.sub(r'<[^>]+>', ' ', t)      # strip HTML tags
+    t = re.sub(r'<[^>]+>', ' ', t)      # strip real HTML tags
+    t = _TAG_WORD_RE.sub(' ', t)        # strip leftover tag-name words / "/tag"
+    # Drop a dangling "/" left attached to a word by a closing remnant
+    # ("Bouquet/strong" -> "Bouquet/" -> "Bouquet"). Leaves real slashes
+    # (and/or, 24/7, km/h) untouched since those are not followed by a space.
+    t = re.sub(r'(?<=[A-Za-z0-9])/(?=\s|$)', '', t)
     t = re.sub(r'[ \t]+', ' ', t)       # collapse runs of spaces/tabs
+    t = re.sub(r' +([.,;:!?])', r'\1', t)  # no space before punctuation
     t = re.sub(r' *\n *', '\n', t)      # tidy spaces around newlines
     return t.strip()
 
