@@ -170,6 +170,31 @@ def _grammar_correct(tool, text):
     return corrected, kept
 
 
+def _format_statements(text):
+    """For multi-line (description) text, treat each line as a statement: ensure
+    it starts with a capital letter and ends with a full stop. Lines that are
+    labels (end with ':') or already end in . ! ? are left as-is. Applied only to
+    multi-line text so single-line item NAMES never get a trailing period."""
+    if '\n' not in text:
+        return text
+    out = []
+    for ln in text.split('\n'):
+        s = ln.strip()
+        if not s:
+            out.append('')
+            continue
+        # Capitalize the first alphabetic character of the statement.
+        for i, ch in enumerate(s):
+            if ch.isalpha():
+                s = s[:i] + ch.upper() + s[i + 1:]
+                break
+        # Add a full stop unless it already ends in terminal/label punctuation.
+        if s[-1].isalnum() or s[-1] in ')]"\'':
+            s += '.'
+        out.append(s)
+    return '\n'.join(out)
+
+
 def _grammar_process(tool, raw_text):
     """Clean + grammar-correct one text and report whether anything changed.
     has_changes is True when grammar changed the text OR markup/entities were
@@ -187,6 +212,7 @@ def _grammar_process(tool, raw_text):
             "changes_summary": "No text provided", "errors_found": 0,
         }
     corrected, kept = _grammar_correct(tool, cleaned)
+    corrected = _format_statements(corrected)  # per-line: capitalize + full stop
     # Markup/entity removal counts as a change (ignore whitespace-only diffs).
     stripped_markup = re.sub(r'\s+', '', raw_text) != re.sub(r'\s+', '', cleaned)
     has_changes = stripped_markup or (cleaned != corrected)
