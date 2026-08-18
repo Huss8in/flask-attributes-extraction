@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import re
+import html
 import random
 from datetime import timedelta
 from collections import OrderedDict
@@ -114,6 +115,40 @@ def get_grammar_tool():
         grammar_tool = language_tool_python.LanguageTool('en-US')
         print("[INFO] LanguageTool initialized successfully")
     return grammar_tool
+
+
+# Spelling rules/categories that "correct" unknown words into dictionary words
+# (e.g. brand/flower names Flowrista -> Florist, Gerbera -> Gerber). We keep
+# grammar / punctuation / capitalization fixes but NEVER auto-replace spellings,
+# so proper nouns and brand names are preserved.
+_SPELLING_RULE_IDS = {'MORFOLOGIK_RULE_EN_US', 'MORFOLOGIK_RULE_EN', 'HUNSPELL_RULE'}
+_SPELLING_CATEGORIES = {'TYPOS'}
+
+
+def _clean_text_for_grammar(text):
+    """Decode HTML entities and strip HTML tags so markup (<strong>, <br>,
+    &mdash;, &rsquo;) is not fed to the grammar checker (which would otherwise
+    mangle it, e.g. capitalize 'Strong'/'BR')."""
+    if not text:
+        return text
+    t = html.unescape(text)             # &mdash; &rsquo; &amp; -> real characters
+    t = re.sub(r'<[^>]+>', ' ', t)      # strip HTML tags
+    t = re.sub(r'[ \t]+', ' ', t)       # collapse runs of spaces/tabs
+    t = re.sub(r' *\n *', '\n', t)      # tidy spaces around newlines
+    return t.strip()
+
+
+def _grammar_correct(tool, text):
+    """Apply LanguageTool corrections EXCEPT spelling replacements, so proper
+    nouns / brand names are never changed. Returns (corrected_text, kept_matches)."""
+    matches = tool.check(text)
+    kept = [
+        m for m in matches
+        if getattr(m, 'ruleId', '') not in _SPELLING_RULE_IDS
+        and (getattr(m, 'category', '') or '') not in _SPELLING_CATEGORIES
+    ]
+    corrected = language_tool_python.utils.correct(text, kept)
+    return corrected, kept
 
 
 def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
@@ -2903,7 +2938,7 @@ def grammar_check():
             # Batch processing
             results = []
             for item in data:
-                original_text = item.get("text", "")
+                original_text = _clean_text_for_grammar(item.get("text", ""))
                 if not original_text:
                     results.append({
                         "original_text": "",
@@ -2913,22 +2948,21 @@ def grammar_check():
                     })
                     continue
 
-                # Check and correct grammar
-                matches = tool.check(original_text)
-                corrected_text = language_tool_python.utils.correct(original_text, matches)
+                # Correct grammar/punctuation/casing only (never spelling).
+                corrected_text, kept = _grammar_correct(tool, original_text)
 
                 results.append({
                     "original_text": original_text,
                     "corrected_text": corrected_text,
                     "has_changes": original_text != corrected_text,
                     "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
-                    "errors_found": len(matches)
+                    "errors_found": len(kept)
                 })
 
             return jsonify(results), 200
         else:
             # Single processing
-            original_text = data.get("text", "")
+            original_text = _clean_text_for_grammar(data.get("text", ""))
 
             if not original_text:
                 return jsonify({
@@ -2939,16 +2973,15 @@ def grammar_check():
                     "errors_found": 0
                 }), 200
 
-            # Check and correct grammar
-            matches = tool.check(original_text)
-            corrected_text = language_tool_python.utils.correct(original_text, matches)
+            # Correct grammar/punctuation/casing only (never spelling).
+            corrected_text, kept = _grammar_correct(tool, original_text)
 
             return jsonify({
                 "original_text": original_text,
                 "corrected_text": corrected_text,
                 "has_changes": original_text != corrected_text,
                 "changes_summary": f"Changed from '{original_text}' to '{corrected_text}'" if original_text != corrected_text else "No changes",
-                "errors_found": len(matches)
+                "errors_found": len(kept)
             }), 200
 
     except Exception as e:
