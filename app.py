@@ -1000,18 +1000,30 @@ def get_attribute_template(shopping_category, item_category, shopping_subcategor
 
 def _normalize_image_urls(images, limit=4):
     """Accept either list of URL strings or list of dicts ({"large":..., "medium":..., "small":...})
-    and return a flat list of URL strings (preferring 'large').
+    and return a flat, deduplicated list of URL strings (preferring 'large').
+
+    Deduplication is intentional — vendors (esp. Shopify) often reuse the same
+    photo across variants, and paying for duplicate GPT-4o image tokens is pure
+    waste.
     """
     if not images:
         return []
     urls = []
+    seen = set()
     for img in images:
+        url = None
         if isinstance(img, str):
-            urls.append(img)
+            url = img
         elif isinstance(img, dict):
             url = img.get("large") or img.get("medium") or img.get("small") or img.get("url")
-            if url:
-                urls.append(url)
+        if not url:
+            continue
+        # Case-insensitive dedup key so trivial URL-case differences don't slip through.
+        key = url.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        urls.append(url)
         if len(urls) >= limit:
             break
     return urls
@@ -1169,12 +1181,26 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
             shopping_category.lower().strip()
         )
 
-    # Step 1b: Fallback to OpenAI GPT-4o Vision if GradProject didn't produce results
-    # Only relevant for categories the grad model supports (fashion, home and garden)
+    # Step 1b: Fallback to OpenAI GPT-4o Vision if GradProject didn't produce results.
+    # Only relevant for categories the grad model supports (fashion, home and garden).
+    #
+    # COST OPTIMIZATION: skip this call when the MAIN extraction call is going
+    # to send the same images to gpt-4o anyway — one vision pass is enough,
+    # the main call will extract color/material from images directly. Saves
+    # ~50% of image-token cost for vision-enabled items.
+    effective_use_vision = USE_GPT4O_VISION if use_vision is None else bool(use_vision)
+    main_call_sees_images = bool(image_urls) and effective_use_vision
+
     if shopping_category.lower().strip() in GRAD_SUPPORTED_CATEGORIES:
         if grad_color is None and grad_material is None:
-            if USE_OPENAI_FALLBACK:
-                print("[INFO] GradProject unavailable or returned no results. Using OpenAI GPT-4o Vision fallback...")
+            if main_call_sees_images:
+                print("[INFO] GradProject unavailable — skipping duplicate color/material vision call "
+                      "(main extraction call will analyze the same images).")
+                grad_data["merged_into_main_vision_call"] = True
+            elif USE_OPENAI_FALLBACK:
+                # Main call is text-only; need a dedicated vision pass just for color/material.
+                print("[INFO] GradProject unavailable — using OpenAI Vision fallback for color/material "
+                      "(main call is text-only).")
                 grad_color, grad_material, vision_confidence = predict_color_material_openai(
                     item_name, description, item_category, image_urls, use_vision=use_vision
                 )
