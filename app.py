@@ -1072,7 +1072,7 @@ def run_openai_model(prompt, images=None, use_vision=None):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are a precise AI attribute extractor for e-commerce products. Follow instructions exactly. When images are provided, analyze them carefully to determine color, material, pattern, and other visual attributes."},
+                {"role": "system", "content": "You are a precise AI attribute extractor for e-commerce products. Follow instructions exactly. When images are provided, analyze them carefully to determine Color, Material, Pattern, Gender (from who is wearing the product, packaging, cut/style, or how it's marketed), Age, Fashion Type, and all other visible attributes. Gender in particular MUST be inferred from the images when the item is apparel, footwear, or accessories — do not leave Gender empty for wearable items."},
                 user_message
             ],
             "max_tokens": 300,
