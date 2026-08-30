@@ -9,6 +9,7 @@ import time
 import re
 import html
 import random
+import threading
 from datetime import timedelta
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -78,6 +79,124 @@ for _attr, _canonical_to_syns in synonyms_map.items():
         for _syn in _syns:
             _bucket[_syn.strip().lower()] = _canonical
     _SYNONYM_LOOKUP[_attr] = _bucket
+
+# ============================================================
+# USAGE / COST TRACKING (in-memory — resets on server restart)
+# ============================================================
+# Pricing reference (per 1M tokens, USD) — update if OpenAI changes pricing.
+# gpt-4o image tokens at "detail: low" are a FIXED 85 tokens per image,
+# regardless of resolution — that's why we don't do any image resizing.
+_PRICING = {
+    "gpt-4o":      {"input": 2.50, "output": 10.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+}
+_LOW_DETAIL_IMAGE_TOKENS = 85  # fixed cost per image at detail="low" on gpt-4o
+
+_usage_lock = threading.Lock()
+_usage_stats = {
+    "started_at": time.time(),
+    "items_processed": 0,             # every extract_ai_attributes() call
+    "vision_calls": 0,                 # main call ran WITH images (gpt-4o)
+    "text_only_calls": 0,              # main call ran WITHOUT images (gpt-4o-mini)
+    "color_material_fallback_calls": 0,  # separate small vision call (legacy path)
+    "images_received_total": 0,        # images in the payload, before dedup
+    "images_sent_total": 0,            # unique images actually sent to OpenAI
+    "images_deduped_away": 0,          # duplicates dropped (received - sent, capped items excluded)
+    "estimated_image_tokens": 0,       # images_sent_total * 85
+    "estimated_prompt_tokens": 0,      # rough running total of non-image input tokens
+    "estimated_output_tokens": 0,      # rough running total of output tokens
+}
+
+
+def _track_images_normalized(received_count, sent_count):
+    with _usage_lock:
+        _usage_stats["images_received_total"] += received_count
+        _usage_stats["images_sent_total"] += sent_count
+        _usage_stats["images_deduped_away"] += max(0, received_count - sent_count)
+
+
+def _track_model_call(model, used_vision, image_count, prompt_tokens_est, output_tokens_est, is_fallback=False):
+    with _usage_lock:
+        if is_fallback:
+            _usage_stats["color_material_fallback_calls"] += 1
+        elif used_vision:
+            _usage_stats["vision_calls"] += 1
+        else:
+            _usage_stats["text_only_calls"] += 1
+        _usage_stats["estimated_image_tokens"] += image_count * _LOW_DETAIL_IMAGE_TOKENS
+        _usage_stats["estimated_prompt_tokens"] += prompt_tokens_est
+        _usage_stats["estimated_output_tokens"] += output_tokens_est
+
+
+def _track_item_processed():
+    with _usage_lock:
+        _usage_stats["items_processed"] += 1
+
+
+def _estimate_tokens(text):
+    """Rough token estimate: ~4 chars per token (English-heavy prompts)."""
+    return max(1, len(text or "") // 4)
+
+
+def _compute_stats_snapshot():
+    """Build the aggregated stats + cost estimate from the raw counters."""
+    with _usage_lock:
+        s = dict(_usage_stats)
+
+    uptime_seconds = time.time() - s["started_at"]
+
+    # Split estimated tokens proportionally between gpt-4o (vision calls +
+    # fallback calls) and gpt-4o-mini (text-only calls) using call counts,
+    # since we track running totals rather than per-call-type totals.
+    vision_like_calls = s["vision_calls"] + s["color_material_fallback_calls"]
+    total_calls = vision_like_calls + s["text_only_calls"]
+
+    if total_calls > 0:
+        vision_share = vision_like_calls / total_calls
+    else:
+        vision_share = 0.0
+
+    gpt4o_prompt_tokens = int(s["estimated_prompt_tokens"] * vision_share)
+    gpt4o_output_tokens = int(s["estimated_output_tokens"] * vision_share)
+    mini_prompt_tokens = s["estimated_prompt_tokens"] - gpt4o_prompt_tokens
+    mini_output_tokens = s["estimated_output_tokens"] - gpt4o_output_tokens
+
+    gpt4o_input_tokens = gpt4o_prompt_tokens + s["estimated_image_tokens"]
+
+    cost_gpt4o_input = gpt4o_input_tokens / 1_000_000 * _PRICING["gpt-4o"]["input"]
+    cost_gpt4o_output = gpt4o_output_tokens / 1_000_000 * _PRICING["gpt-4o"]["output"]
+    cost_mini_input = mini_prompt_tokens / 1_000_000 * _PRICING["gpt-4o-mini"]["input"]
+    cost_mini_output = mini_output_tokens / 1_000_000 * _PRICING["gpt-4o-mini"]["output"]
+
+    total_cost = cost_gpt4o_input + cost_gpt4o_output + cost_mini_input + cost_mini_output
+    avg_images_per_item = (s["images_sent_total"] / s["vision_calls"]) if s["vision_calls"] else 0.0
+    avg_cost_per_item = (total_cost / s["items_processed"]) if s["items_processed"] else 0.0
+
+    return {
+        "uptime_seconds": uptime_seconds,
+        "items_processed": s["items_processed"],
+        "vision_calls": s["vision_calls"],
+        "text_only_calls": s["text_only_calls"],
+        "color_material_fallback_calls": s["color_material_fallback_calls"],
+        "images_received_total": s["images_received_total"],
+        "images_sent_total": s["images_sent_total"],
+        "images_deduped_away": s["images_deduped_away"],
+        "avg_images_per_vision_item": round(avg_images_per_item, 2),
+        "estimated_image_tokens": s["estimated_image_tokens"],
+        "estimated_prompt_tokens": s["estimated_prompt_tokens"],
+        "estimated_output_tokens": s["estimated_output_tokens"],
+        "cost_gpt4o_usd": round(cost_gpt4o_input + cost_gpt4o_output, 4),
+        "cost_gpt4o_mini_usd": round(cost_mini_input + cost_mini_output, 4),
+        "total_estimated_cost_usd": round(total_cost, 4),
+        "avg_cost_per_item_usd": round(avg_cost_per_item, 6),
+        "image_detail_level": "low",
+        "image_tokens_per_image": _LOW_DETAIL_IMAGE_TOKENS,
+        "max_images_per_item": 4,
+        "vision_model": "gpt-4o",
+        "text_model": OPENAI_MODEL_NAME,
+        "use_gpt4o_vision_default": USE_GPT4O_VISION,
+    }
+
 
 # ============================================================
 # FLASK APP INITIALIZATION
@@ -865,7 +984,21 @@ Rules:
 
         r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
-        result = r.json()["choices"][0]["message"]["content"].strip()
+        response_json = r.json()
+        result = response_json["choices"][0]["message"]["content"].strip()
+
+        usage = response_json.get("usage", {})
+        images_sent = min(len(images), 3) if images else 0
+        if usage:
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            image_tok_est = images_sent * _LOW_DETAIL_IMAGE_TOKENS
+            prompt_tokens_est = max(0, prompt_tokens - image_tok_est)
+            output_tokens_est = usage.get("completion_tokens", 0)
+        else:
+            prompt_tokens_est = _estimate_tokens(prompt_text)
+            output_tokens_est = _estimate_tokens(result)
+        _track_model_call(VISION_MODEL, bool(images_sent), images_sent,
+                           prompt_tokens_est, output_tokens_est, is_fallback=True)
 
         color = None
         material = None
@@ -1080,7 +1213,25 @@ def run_openai_model(prompt, images=None, use_vision=None):
         }
         r = openai_post_with_retry(payload, headers)
         r.raise_for_status()
-        result = r.json()["choices"][0]["message"]["content"].strip()
+        response_json = r.json()
+        result = response_json["choices"][0]["message"]["content"].strip()
+
+        # Track usage — prefer OpenAI's actual token counts when available,
+        # fall back to a rough character-based estimate otherwise.
+        usage = response_json.get("usage", {})
+        if usage:
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            # Actual prompt_tokens already INCLUDES image tokens on vision
+            # calls, so subtract our own image-token estimate to avoid
+            # double-counting them in the stats breakdown.
+            image_tok_est = len(image_urls) * _LOW_DETAIL_IMAGE_TOKENS if use_vision else 0
+            prompt_tokens_est = max(0, prompt_tokens - image_tok_est)
+            output_tokens_est = usage.get("completion_tokens", 0)
+        else:
+            prompt_tokens_est = _estimate_tokens(prompt)
+            output_tokens_est = _estimate_tokens(result)
+        _track_model_call(model, use_vision, len(image_urls) if use_vision else 0,
+                           prompt_tokens_est, output_tokens_est)
 
         # Clean markdown and placeholders
         result = re.sub(r'```[a-z]*\n?', '', result)
@@ -1163,6 +1314,12 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
 
     # Normalize images: accept either raw URL strings or dicts with large/medium/small.
     image_urls = _normalize_image_urls(images, limit=4)
+    # Track raw-vs-deduped counts ONCE here (the true entry point for this
+    # item's images) — downstream calls (run_openai_model) re-normalize an
+    # already-deduped list, so tracking there would double-count.
+    _raw_image_count = len(images) if images else 0
+    _track_images_normalized(_raw_image_count, len(image_urls))
+    _track_item_processed()
 
     # Step 1: Try grad model for fashion/home&garden with images
     grad_color = None
@@ -3496,6 +3653,145 @@ def global_health():
         },
         "port": FLASK_PORT
     })
+
+
+@app.route('/api/stats', methods=['GET'])
+def usage_stats_json():
+    """Raw JSON usage/cost stats — same data the /stats HTML page renders."""
+    return jsonify(_compute_stats_snapshot())
+
+
+@app.route('/stats', methods=['GET'])
+def usage_stats_page():
+    """Human-readable dashboard: image usage + estimated GPT-4o vision cost.
+
+    In-memory counters — resets on server restart. Not a persisted metric,
+    just a live snapshot of usage since the process last started.
+    """
+    s = _compute_stats_snapshot()
+
+    uptime_h = s["uptime_seconds"] / 3600
+    uptime_str = f"{int(uptime_h)}h {int((s['uptime_seconds'] % 3600) // 60)}m"
+
+    dedup_pct = (
+        round(100 * s["images_deduped_away"] / s["images_received_total"], 1)
+        if s["images_received_total"] else 0.0
+    )
+
+    html_page = f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AI Attributes — Usage &amp; Cost Stats</title>
+<style>
+  body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 32px; }}
+  h1 {{ font-size: 20px; margin-bottom: 4px; }}
+  .subtitle {{ color: #9aa0a6; font-size: 13px; margin-bottom: 28px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 28px; }}
+  .card {{ background: #1a1d24; border: 1px solid #2a2e37; border-radius: 10px; padding: 18px; }}
+  .card .label {{ color: #9aa0a6; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }}
+  .card .value {{ font-size: 26px; font-weight: 600; }}
+  .card .sub {{ color: #9aa0a6; font-size: 12px; margin-top: 4px; }}
+  .section {{ margin-bottom: 28px; }}
+  .section h2 {{ font-size: 15px; color: #cfd3da; margin-bottom: 10px; border-bottom: 1px solid #2a2e37; padding-bottom: 6px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  td, th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid #22252c; }}
+  th {{ color: #9aa0a6; font-weight: 500; }}
+  .flow {{ background: #1a1d24; border: 1px solid #2a2e37; border-radius: 10px; padding: 18px; font-size: 13px; line-height: 1.7; color: #cfd3da; }}
+  .flow code {{ background: #22252c; padding: 1px 6px; border-radius: 4px; color: #7dd3fc; }}
+  .cost-total {{ color: #4ade80; }}
+  .badge {{ display: inline-block; background: #22252c; border-radius: 6px; padding: 2px 8px; font-size: 11px; color: #9aa0a6; margin-left: 8px; }}
+</style>
+</head>
+<body>
+  <h1>AI Attributes — Image Usage &amp; Cost Stats</h1>
+  <div class="subtitle">Live since server start ({uptime_str} ago) &middot; in-memory counters, resets on restart &middot; <a href="/api/stats" style="color:#7dd3fc">raw JSON</a></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Items Processed</div>
+      <div class="value">{s['items_processed']:,}</div>
+      <div class="sub">extract_ai_attributes() calls</div>
+    </div>
+    <div class="card">
+      <div class="label">Vision Calls (gpt-4o)</div>
+      <div class="value">{s['vision_calls']:,}</div>
+      <div class="sub">items where images were sent</div>
+    </div>
+    <div class="card">
+      <div class="label">Text-only Calls</div>
+      <div class="value">{s['text_only_calls']:,}</div>
+      <div class="sub">{OPENAI_MODEL_NAME}, no images</div>
+    </div>
+    <div class="card">
+      <div class="label">Estimated Total Cost</div>
+      <div class="value cost-total">${s['total_estimated_cost_usd']:.4f}</div>
+      <div class="sub">gpt-4o + {OPENAI_MODEL_NAME} combined</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Image Volume</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th></tr>
+      <tr><td>Images received (raw, before dedup)</td><td>{s['images_received_total']:,}</td></tr>
+      <tr><td>Images actually sent to OpenAI (after dedup + 4-cap)</td><td>{s['images_sent_total']:,}</td></tr>
+      <tr><td>Duplicate images dropped</td><td>{s['images_deduped_away']:,} <span class="badge">{dedup_pct}% of received</span></td></tr>
+      <tr><td>Average images per vision item</td><td>{s['avg_images_per_vision_item']}</td></tr>
+      <tr><td>Max images per item (hard cap)</td><td>{s['max_images_per_item']}</td></tr>
+      <tr><td>Image detail level used</td><td><code>{s['image_detail_level']}</code> — fixed {s['image_tokens_per_image']} tokens/image regardless of resolution</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Cost Breakdown (estimated)</h2>
+    <table>
+      <tr><th>Model</th><th>Role</th><th>Est. Cost (USD)</th></tr>
+      <tr><td>gpt-4o</td><td>Vision calls + color/material fallback</td><td>${s['cost_gpt4o_usd']:.4f}</td></tr>
+      <tr><td>{OPENAI_MODEL_NAME}</td><td>Text-only extraction</td><td>${s['cost_gpt4o_mini_usd']:.4f}</td></tr>
+      <tr><td colspan="2"><b>Total</b></td><td class="cost-total"><b>${s['total_estimated_cost_usd']:.4f}</b></td></tr>
+      <tr><td colspan="2">Average cost per item processed</td><td>${s['avg_cost_per_item_usd']:.6f}</td></tr>
+    </table>
+    <div class="sub" style="margin-top:10px;">Pricing basis: gpt-4o $2.50/1M input, $10.00/1M output tokens &middot; {OPENAI_MODEL_NAME} $0.15/1M input, $0.60/1M output tokens. Token counts use OpenAI's actual <code>usage</code> field when available, otherwise a ~4 chars/token estimate. Update _PRICING in app.py if OpenAI changes rates.</div>
+  </div>
+
+  <div class="section">
+    <h2>Token Totals (raw)</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th></tr>
+      <tr><td>Estimated image tokens</td><td>{s['estimated_image_tokens']:,}</td></tr>
+      <tr><td>Estimated prompt (text) tokens</td><td>{s['estimated_prompt_tokens']:,}</td></tr>
+      <tr><td>Estimated output tokens</td><td>{s['estimated_output_tokens']:,}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Current Configuration</h2>
+    <table>
+      <tr><th>Setting</th><th>Value</th></tr>
+      <tr><td>Vision model</td><td>{s['vision_model']}</td></tr>
+      <tr><td>Text model</td><td>{s['text_model']}</td></tr>
+      <tr><td>Global USE_GPT4O_VISION default</td><td>{s['use_gpt4o_vision_default']}</td></tr>
+      <tr><td>Color/material fallback calls (legacy path, text-only jobs only)</td><td>{s['color_material_fallback_calls']:,}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>How the flow works (short version)</h2>
+    <div class="flow">
+      1. Item comes in with N images (URL strings or Shopify-style <code>{{large, medium, small}}</code> objects).<br>
+      2. Images are normalized to URLs and <b>deduplicated</b> (case-insensitive) — vendors often reuse the same photo across variants.<br>
+      3. Capped at <b>4 images per item</b>.<br>
+      4. <b>ONE</b> GPT-4o Vision call is made per item with ALL remaining images attached to a single request (not one call per image) — the model cross-references them internally and returns one aggregated set of attributes (Gender, Color, Material, Pattern, Age, Features, etc.).<br>
+      5. Each image costs a fixed <b>85 tokens</b> at <code>detail: "low"</code>, regardless of resolution — this is why we don't resize images before sending.<br>
+      6. If vision is disabled (<code>USE_GPT4O_VISION=False</code> or per-request <code>use_vision:false</code>), the item is processed <b>text-only</b> via {OPENAI_MODEL_NAME} — much cheaper, no image tokens at all.<br>
+      7. Deterministic post-processing then runs on the model's output (Age-vs-Size, Features whitelist, Product Name dedup, Home&amp;Garden gender clearing, Beauty volume-as-size) — these are pure Python, zero additional API cost.
+    </div>
+  </div>
+
+</body>
+</html>"""
+    return html_page, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 # ============================================================
