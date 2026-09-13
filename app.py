@@ -1435,20 +1435,24 @@ INSTRUCTIONS:
   - "Boys" — kids product for boys (e.g. boy's t-shirt, boy's shoes)
   - "Unisex girls, Unisex boys" — KIDS product that genuinely suits both girls AND boys (e.g. unisex baby onesie, kids backpack, school supplies)
 NEVER output just "Unisex" alone — it MUST be one of the two paired forms above (adult or kids version). Choose the kids form for any product clearly aimed at children/babies/toddlers; choose the adult form otherwise. Leave empty ONLY for clearly non-gendered products (e.g. kitchenware, cleaning supplies, electronics that aren't worn).
-- Generic Name: the core item type only — no brand, no descriptors (e.g. "Matelda Chocolate Cake 120 grams" -> cake; "Astonish Premium Starch Spray" -> starch spray).
+- Generic Name: the SPECIFIC, precise noun for what this product actually is — no brand, no descriptors. DO NOT simply copy the Item Category value — Item Category is a broad bucket that groups many different specific products together, and copying it produces a vague, unhelpful Generic Name. Derive the specific noun from the Item Name / Description instead.
+  Examples (grocery/home): "Matelda Chocolate Cake 120 grams" -> cake (not "bakery"); "Astonish Premium Starch Spray" -> starch spray (not "household products"); "GreenPan Mayflower Pro Frying Pan 24cm" -> frying pan (not "pot and pan" — that's the Item Category bucket, too broad).
+  Examples (fashion — Item Category is ALWAYS too broad here, dig into Item Name for the real noun): Item Category "top" + Item Name "Balloon Denim Shirt" -> shirt (not "top"); Item Category "top" + Item Name "Ribbed Tank Top" -> tank top (not "top"); Item Category "shoe" + Item Name "Nike Air Max 270 Running Shoes" -> running shoes / sneaker (not "shoe"); Item Category "outerwear" + Item Name "Wool Blazer" -> blazer (not "outerwear"); Item Category "bag" + Item Name "Leather Crossbody Bag" -> crossbody bag (not "bag").
+  Rule of thumb: if your Generic Name answer is identical (or near-identical) to the Item Category value given in the input, you have almost certainly gotten this wrong — go back to the Item Name and find the specific product noun instead.
 - Features: 1-3 CORE/UNIQUE selling features of this product — capabilities/properties that make it different from a generic item in the same category. DO fill this whenever the Item Name or Description mentions any distinctive capability (e.g. "Anker Headphones - Waterproof, Noise Cancelling, 40h Battery" -> "waterproof, noise cancelling, 40h battery"; "Non-stick frying pan with ceramic coating" -> "non-stick, ceramic coating"; "Smart Watch with GPS and Heart Rate" -> "GPS, heart rate monitor"). Features is NOT a dumping ground for other attributes: NEVER include values that belong to Color/Size/Material/Pattern/Brand/Gender/Fashion Type — those have their own dedicated fields. WRONG Features (do NOT do this): "blue, large, cotton, women, casual" — those go in Color/Size/Material/Gender/Fashion Type. ONLY leave Features EMPTY when the product is a plain commodity with no distinctive capability mentioned anywhere (e.g. plain t-shirt, fresh tomatoes, basic mug). If the description mentions a capability, you MUST include it in Features.
-- Product Name: OPTIONAL — only fill when there is a real branded product/model identifier. KEEP the brand and the product/model name, but STRIP all packaging/variant/marketing noise. Remove: parenthesized specs like "(256 GB)", color/variant after a dash like "- Cosmic Orange", size/quantity like "120 grams" or "Large", everything after pipes "|" (e.g. "| Tax Paid | 2 Years Warranty"), and feature taglines like "with Face ID". When filled, Product Name MUST be SHORTER than the Item Name (typically 2-5 words). Examples to FILL:
-  - "Apple iPhone 17 Pro Max (256 GB) - Cosmic Orange with Face ID | Tax Paid | 2 Years Official Warranty" -> "Apple iPhone 17 Pro Max"
-  - "Samsung Galaxy S24 Ultra 512GB Black - Free Shipping" -> "Samsung Galaxy S24 Ultra"
-  - "Matelda Chocolate Cake 120 grams" -> "Matelda Chocolate Cake"
-  - "Astonish Premium Starch Spray 500ml" -> "Astonish Premium Starch Spray"
-  - "White Magic Jumbo Kitchen Rolls Large - 6 Pack" -> "White Magic Jumbo Kitchen Rolls"
-Leave Product Name EMPTY when the item has no real brand or model identifier — generic / unbranded / commodity products. Examples to LEAVE EMPTY:
-  - "Tomatoes 1kg" -> "" (just a commodity; Generic Name: tomatoes)
-  - "Plain White T-Shirt" -> "" (no brand or model)
-  - "Fresh Eggs - 12 pack" -> "" (commodity)
-  - "Cotton Bed Sheet King Size" -> "" (no brand or product line)
-DECISION RULE for Product Name: only fill it when BOTH (a) the Brand field is non-empty AND (b) there is a real product/model identifier after the brand (model name, series name, like "Galaxy S24 Ultra", "Premium Starch Spray", "Chocolate Cake"). If either is missing — leave Product Name EMPTY. NEVER output the full Item Name unchanged. If you cannot produce a Product Name that is strictly SHORTER than the Item Name and starts with the Brand, leave it EMPTY.{color_material_hint}
+- Product Name: fill this whenever you were able to identify a Brand — Product Name is simply "Brand + the product/model words that immediately follow it in the Item Name", with packaging/variant/marketing noise stripped off the end. DEFAULT TO FILLING when a Brand exists; only leave it empty for genuinely unbranded/commodity items (no Brand at all).
+  How to build it: start with Brand, then keep adding the next words from Item Name until you hit any of: an opening parenthesis "(", a pipe "|", a dash introducing a variant/color like "- Cosmic Orange", a size/quantity/measurement (e.g. "120 grams", "500ml", "256GB", "Size 42"), or a promotional phrase (e.g. "Free Shipping", "Tax Paid", "Warranty"). Stop there — everything up to that point is the Product Name.
+  Examples:
+  - "Apple iPhone 17 Pro Max (256 GB) - Cosmic Orange with Face ID | Tax Paid | 2 Years Official Warranty" -> "Apple iPhone 17 Pro Max" (stopped at the parenthesis)
+  - "Samsung Galaxy S24 Ultra 512GB Black - Free Shipping" -> "Samsung Galaxy S24 Ultra" (stopped at "512GB")
+  - "Nike Air Max 270 Running Shoes - Black/White Size 42" -> "Nike Air Max 270" (stopped at the dash/color)
+  - "Matelda Chocolate Cake 120 grams" -> "Matelda Chocolate Cake" (stopped at "120 grams")
+  - "GreenPan Mayflower Pro With Ceramic Non-Stick Coating 24 Cm" -> "GreenPan Mayflower Pro" (stopped before the descriptive "With..." phrase — don't drag in marketing copy even if it comes before the measurement)
+  Leave Product Name EMPTY only when there is no Brand at all (fully generic/unbranded item):
+  - "Tomatoes 1kg" -> "" (no brand — commodity)
+  - "Plain White T-Shirt" -> "" (no brand)
+  - "Cotton Bed Sheet King Size" -> "" (no brand)
+  Simple check: if Brand is non-empty, Product Name should almost always be non-empty too. NEVER output the full Item Name unchanged as Product Name — always trim at least the packaging/variant tail.{color_material_hint}
 - Keep the output clean and structured exactly as below
 - DO NOT use markdown code blocks (```)
 - DO NOT include "None", "unknown", "N/A" - use empty string instead
