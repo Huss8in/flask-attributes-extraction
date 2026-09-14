@@ -1483,6 +1483,13 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     # Third safety net: if Product Name == Item Name (after normalization),
     # clear it. Fixes the 60% "PN copied from IN" bug flagged by data entry.
     result = _postprocess_product_name_dedup(result, item_name, variant_name)
+    # Fourth safety net: if Product Name came back EMPTY but Brand is filled
+    # and there's a real trim opportunity, mechanically build one. Fixes the
+    # 100% "missing Product Name" bug — reproducibly, gpt-4o-mini refuses to
+    # fill Product Name for fashion items even with a correctly identified
+    # Brand and a literal worked example in the prompt, so a deterministic
+    # builder is more reliable here than further prompt tuning.
+    result = _postprocess_product_name_fill(result, item_name)
     return result, grad_data
 
 
@@ -1813,6 +1820,124 @@ def _postprocess_product_name_dedup(text, item_name, variant_name=''):
         if should_clear:
             lines[i] = f"{key.strip()}:"
         break
+    return '\n'.join(lines)
+
+
+# Tokens that introduce marketing/descriptive copy rather than more of the
+# product-line name — a stop marker for the Product Name builder below.
+_PN_STOP_WORD_RE = re.compile(
+    r'^(with|for|featuring|includes?|include|comes?|made|designed|perfect|ideal|'
+    r'suitable|free|size|available|offers?|provides?|'
+    r'xxxl|xxl|xl|xs|small|medium|large)$',
+    re.IGNORECASE,
+)
+
+# A token that is a number+unit glued together (e.g. "20cm", "512GB", "3.5oz").
+_PN_NUMBER_UNIT_TOKEN_RE = re.compile(
+    r'^\d+(\.\d+)?[a-zA-Z]+$'
+)
+
+# A bare unit word that, following a numeric token, together form a
+# measurement (e.g. "120" + "grams").
+_PN_BARE_UNIT_WORD_RE = re.compile(
+    r'^(kilograms?|kilos?|milligrams?|grams?|ounces?|pounds?|milliliters?|'
+    r'litres?|liters?|centimeters?|millimeters?|meters?|inches|inch|feet|foot|'
+    r'kilobytes?|megabytes?|gigabytes?|terabytes?|watts?|volts?|amps?|'
+    r'packs?|pieces?|counts?|sheets?|plies|ply|'
+    r'hours?|hrs?|hr|minutes?|mins?|min|seconds?|secs?|sec|days?|mah|ppi|dpi|'
+    r'kg|gm|mg|ml|kb|mb|gb|tb|kw|khz|mhz|ghz|hz|cm|mm|oz|lb|lbs|pcs|pc|ct|g|l|w|v)$',
+    re.IGNORECASE,
+)
+
+
+def _build_product_name_from_brand(item_name, brand, max_words=5):
+    """Deterministic safety net for when the model correctly identifies a
+    Brand but leaves Product Name empty anyway (observed reproducibly on
+    fashion items with gpt-4o-mini — even literal worked examples from the
+    prompt didn't change this, so a hardcoded builder is more reliable than
+    further prompt tuning here).
+
+    Mechanically builds PN = Brand + the words immediately following it in
+    Item Name, stopping at the first packaging/variant/measurement/promo
+    marker. Returns None (caller should leave PN empty) when:
+      - brand isn't the leading text of item_name,
+      - there's nothing left to add after the brand,
+      - or the built candidate doesn't actually trim anything meaningful
+        (i.e. it would just duplicate the full Item Name).
+    """
+    if not item_name or not brand:
+        return None
+    if item_name.lower().find(brand.lower()) != 0:
+        return None  # only handle the common case: brand leads the item name
+
+    remainder = item_name[len(brand):].strip()
+    if not remainder:
+        return None
+
+    tokens = remainder.split(' ')
+    collected = []
+    for idx, tok in enumerate(tokens):
+        if len(collected) >= max_words:
+            break
+        bare = tok.strip('.,;:')
+        if not bare:
+            continue
+        if bare.startswith('(') or bare in ('|', '-'):
+            break
+        if _PN_STOP_WORD_RE.match(bare):
+            break
+        if re.match(r'^\d+$', bare) and idx == len(tokens) - 1:
+            break  # a bare number is only a size/qty when it TRAILS the name
+            # (e.g. "Trail Runner 42" -> size 42). A bare number followed by
+            # more words (e.g. "Air Max 270 Running Shoes") is a model
+            # number, not a size — keep it.
+        if _PN_NUMBER_UNIT_TOKEN_RE.match(bare) and _PN_MEASUREMENT_TAIL_RE.search(bare):
+            break  # glued number+unit, e.g. "20cm", "512GB"
+        if _PN_BARE_UNIT_WORD_RE.match(bare) and collected and re.match(r'^\d+(\.\d+)?$', collected[-1].strip('.,;:')):
+            collected.pop()  # drop the preceding number too — "120 grams" is one unit
+            break
+        collected.append(tok)
+
+    if not collected:
+        return None
+
+    candidate = f"{brand} {' '.join(collected)}".strip()
+    norm_candidate = _normalize_for_pn_match(candidate)
+    norm_item = _normalize_for_pn_match(item_name)
+    if not norm_candidate or norm_candidate == norm_item or len(norm_candidate) >= len(norm_item):
+        return None  # nothing meaningful was trimmed — leave PN empty
+    return candidate
+
+
+def _postprocess_product_name_fill(text, item_name):
+    """If Product Name is empty but Brand is non-empty, try to mechanically
+    build one via _build_product_name_from_brand. Complements
+    _postprocess_product_name_dedup, which only ever REMOVES a bad PN —
+    this fills in a good one when the model refused to.
+    """
+    if not text or 'product name:' not in text.lower() or 'brand:' not in text.lower():
+        return text
+    lines = text.split('\n')
+    brand = ''
+    pn_idx = None
+    for i, line in enumerate(lines):
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        key_lower = key.strip().lower()
+        if key_lower == 'brand':
+            brand = val.strip()
+        elif key_lower == 'product name':
+            pn_idx = i
+            pn_val = val.strip()
+    if pn_idx is None or not brand:
+        return text
+    if lines[pn_idx].partition(':')[2].strip():
+        return text  # already filled — don't touch it
+    built = _build_product_name_from_brand(item_name, brand)
+    if built:
+        key = lines[pn_idx].split(':', 1)[0]
+        lines[pn_idx] = f"{key}: {built}"
     return '\n'.join(lines)
 
 
