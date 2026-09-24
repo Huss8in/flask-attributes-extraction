@@ -1050,6 +1050,8 @@ _HOME_GARDEN_SUBCAT_NORMALIZE = {
     "bed and bath": "bed & bath",
     "gardening and outdoor": "gardening & outdoor",
     "hardware and home improvement": "hardware & home improvement",
+    # kids: the mapping key is "toys & games" but the taxonomy subcategory is "toys and games"
+    "toys and games": "toys & games",
 }
 
 # Defines which field is used to look up the attribute template for each category.
