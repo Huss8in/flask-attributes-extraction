@@ -1045,7 +1045,6 @@ Rules:
 
 _HOME_GARDEN_SUBCAT_NORMALIZE = {
     "kitchenwear": "kitchenware",
-    "household products": "household products / Home Scent",
     "storage and organization": "storage & organization",
     "bed and bath": "bed & bath",
     "gardening and outdoor": "gardening & outdoor",
@@ -1152,6 +1151,10 @@ def _normalize_image_urls(images, limit=4):
         elif isinstance(img, dict):
             url = img.get("large") or img.get("medium") or img.get("small") or img.get("url")
         if not url:
+            continue
+        # Items without a photo carry a relative placeholder (e.g. "/app/img/items/no-img.png");
+        # OpenAI rejects non-http(s) image URLs with a 400, failing the whole item.
+        if not re.match(r'^https?://', url.strip(), re.I) or 'no-img' in url.lower():
             continue
         # Case-insensitive dedup key so trivial URL-case differences don't slip through.
         key = url.strip().lower()
