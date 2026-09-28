@@ -1495,6 +1495,15 @@ Output ONLY the above format. NO markdown, NO extra lines or explanations.
     # Brand and a literal worked example in the prompt, so a deterministic
     # builder is more reliable here than further prompt tuning.
     result = _postprocess_product_name_fill(result, item_name)
+    # Fifth safety net (fashion only): make Gender evidence-based. The model
+    # guesses a specific gender for gender-neutral items with no evidence
+    # (running shoes/jeans -> "Men") or leaves it empty, so we decide it
+    # deterministically instead. Runs last so Age is already normalized.
+    result = _postprocess_fashion_gender(
+        result, shopping_category, shopping_subcategory, item_category,
+        item_name, variant_name, menu_category, vendor_category, description,
+        vision_used=main_call_sees_images,
+    )
     return result, grad_data
 
 
@@ -1946,6 +1955,172 @@ def _postprocess_product_name_fill(text, item_name):
     return '\n'.join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Fashion Gender resolver (evidence-based)
+# ---------------------------------------------------------------------------
+_G_ADULT_UNISEX = "Unisex women, Unisex men"
+_G_KIDS_UNISEX = "Unisex girls, Unisex boys"
+
+# "baby" is also a colour ("baby pink", "baby blue") and a style ("baby doll"),
+# so it only counts as a kids signal when NOT followed by one of those words.
+_G_KIDS_RE = re.compile(
+    r"\b(kids?|kidswear|child|children|babies|toddlers?|infants?|newborns?)\b"
+    r"|\bbaby\b(?!\s*[-]?\s*(?:pink|blue|yellow|green|purple|lilac|mint|peach|white|grey|gray|doll|powder|face|hair|oil|soft|skin))"
+    r"|أطفال|اطفال|طفل|بيبي|رضع|مواليد",
+    re.IGNORECASE,
+)
+_G_BOYS_RE = re.compile(r"\bboys?\b|\bboy's\b|ولادي|أولاد|اولاد", re.IGNORECASE)
+_G_GIRLS_RE = re.compile(r"\bgirls?\b|\bgirl's\b|بناتي|بنات|بنوتي", re.IGNORECASE)
+_G_MEN_RE = re.compile(r"\bmen(?:'s|s)?\b|\bmale\b|\bgents?\b|\bgentlem[ae]n\b|رجالي|رجال|للرجال", re.IGNORECASE)
+_G_WOMEN_RE = re.compile(
+    r"\bwom[ae]n(?:'s|s)?\b|\bladies\b|\blady\b|\bfemale\b|حريمي|نسائي|نساء|للنساء|سيدات|حريم",
+    re.IGNORECASE,
+)
+_G_UNISEX_RE = re.compile(
+    r"\bunisex\b|للجنسين|يونيسكس|\bmen\s*(?:and|&)\s*women\b|\bwomen\s*(?:and|&)\s*men\b|\bboys\s*(?:and|&)\s*girls\b|\bgirls\s*(?:and|&)\s*boys\b",
+    re.IGNORECASE,
+)
+
+# Item types that are inherently gendered — a guess from the type alone is
+# reliable for these, unlike shoes/jeans/tees/belts/bags/watches.
+_G_FEMALE_TYPE_RE = re.compile(
+    r"\b(bras?|bralettes?|lingerie|panty|panties|camisoles?|corsets?|"
+    r"dress(?:es)?(?!\s*(?:shirts?|shoes?|pants|trousers|socks|watch|code|belt))|"
+    r"gowns?|skirts?|blouses?|heels?|stilettos?|pumps|bikinis?|maternity|nursing|"
+    r"abayas?|hijabs?|nightgowns?|negligees?|earrings?|anklets?|tiaras?)\b"
+    r"|فستان|فساتين|تنورة|بلوزة|عباية|عباءة|حجاب|لانجري",
+    re.IGNORECASE,
+)
+_G_MALE_TYPE_RE = re.compile(
+    r"\b(boxers?|boxer\s*briefs?|thobes?|thawbs?|cufflinks?|neckties?|tuxedos?)\b|بوكسر",
+    re.IGNORECASE,
+)
+
+_G_BABY_ITEM_CATEGORIES = {
+    "onesie", "baby gown", "bloomers", "diaper cover", "babygrow", "baby sock",
+    "diaper shirt", "baby mitten", "romper", "baby accessory", "lap tee",
+    "baby leggings", "baby shoe", "jumpsuit",
+}
+_G_AGE_VALUE_RE = re.compile(r"\d+\s*(?:-\s*\d+\s*)?(?:years?|months?)", re.IGNORECASE)
+
+
+def _detect_gender_in_text(text):
+    """Classify the gender evidence in one piece of text.
+
+    Returns one of: "Men", "Women", "Boys", "Girls", "unisex_adult",
+    "unisex_kids", or None when the text carries no gender evidence.
+    """
+    if not text:
+        return None
+    unisex = bool(_G_UNISEX_RE.search(text))
+    kids = bool(_G_KIDS_RE.search(text))
+    boys = bool(_G_BOYS_RE.search(text))
+    girls = bool(_G_GIRLS_RE.search(text))
+    men = bool(_G_MEN_RE.search(text))
+    women = bool(_G_WOMEN_RE.search(text))
+
+    if unisex:
+        return "unisex_kids" if (kids or boys or girls) else "unisex_adult"
+    if kids or boys or girls:
+        if boys and not girls:
+            return "Boys"
+        if girls and not boys:
+            return "Girls"
+        return "unisex_kids"
+    if men and women:
+        return "unisex_adult"
+    if men:
+        return "Men"
+    if women:
+        return "Women"
+    return None
+
+
+def _resolve_gender_evidence(texts):
+    """Scan sources in priority order (menu category first). A specific answer
+    (Men/Women/Boys/Girls) beats a generic "unisex" one found earlier, so a
+    menu of "Kids" plus an item named "Boys Tee" resolves to Boys."""
+    generic = None
+    for t in texts:
+        r = _detect_gender_in_text(t)
+        if not r:
+            continue
+        if r in ("Men", "Women", "Boys", "Girls"):
+            return r
+        if generic is None:
+            generic = r
+    return generic
+
+
+def _postprocess_fashion_gender(text, shopping_category, shopping_subcategory, item_category,
+                                item_name, variant_name, menu_category, vendor_category,
+                                description, vision_used=False):
+    """Make Gender evidence-based for fashion items.
+
+    Root cause this fixes: with no gender evidence the model guesses a
+    specific gender for gender-neutral items (running shoes / sneakers /
+    jeans -> "Men") or leaves the field empty, giving both "wrong gender" and
+    "missing gender". Resolution order:
+      1. Explicit text evidence (menu category, item name, variant, vendor
+         category, description; English + Arabic) -> use it.
+      2. Vision ran and the model answered -> keep the image-based answer.
+      3. Inherently gendered item type (bra, dress, skirt, heels...) -> that gender.
+      4. Otherwise -> Unisex (kids form when Age / baby category says kids).
+    """
+    if not text or (shopping_category or "").strip().lower() != "fashion":
+        return text
+
+    lines = text.split("\n")
+    gender_idx = age_val = generic_name = None
+    model_gender = ""
+    for i, line in enumerate(lines):
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        k = key.strip().lower()
+        if k == "gender":
+            gender_idx, model_gender = i, val.strip()
+        elif k in ("age", "age filter"):
+            age_val = val.strip()
+        elif k == "generic name":
+            generic_name = val.strip()
+    if gender_idx is None:
+        return text
+
+    sub = (shopping_subcategory or "").strip().lower()
+    item_cat = (item_category or "").strip().lower()
+    kids_ctx = bool(
+        (age_val and _G_AGE_VALUE_RE.search(age_val))
+        or sub == "baby clothes"
+        or item_cat in _G_BABY_ITEM_CATEGORIES
+    )
+
+    evidence = _resolve_gender_evidence(
+        [menu_category, item_name, variant_name, vendor_category, description]
+    )
+
+    if evidence == "unisex_adult":
+        final = _G_KIDS_UNISEX if kids_ctx else _G_ADULT_UNISEX
+    elif evidence == "unisex_kids":
+        final = _G_KIDS_UNISEX
+    elif evidence in ("Men", "Women", "Boys", "Girls"):
+        final = evidence
+    elif vision_used and model_gender:
+        final = model_gender
+    else:
+        type_text = " ".join(filter(None, [item_name, item_cat, generic_name]))
+        if _G_FEMALE_TYPE_RE.search(type_text):
+            final = "Girls" if kids_ctx else "Women"
+        elif _G_MALE_TYPE_RE.search(type_text):
+            final = "Boys" if kids_ctx else "Men"
+        else:
+            final = _G_KIDS_UNISEX if kids_ctx else _G_ADULT_UNISEX
+
+    key = lines[gender_idx].split(":", 1)[0]
+    lines[gender_idx] = f"{key}: {final}"
+    return "\n".join(lines)
+
+
 # Fields that identify the product itself, not properties to filter by.
 _NON_FILTER_FIELDS = {
     "product name", "generic name", "description", "item name", "vendor category",
@@ -1980,8 +2155,13 @@ def build_filters_from_attributes(ai_attributes_text):
             continue
         if key.lower() in _NON_FILTER_FIELDS:
             continue
-        # Split comma-separated multi-values (Features, Season, etc.)
-        values = [v.strip() for v in val.split(',') if v.strip()]
+        # Split comma-separated multi-values (Features, Season, etc.) — except
+        # Gender, which is single-valued and whose canonical unisex values
+        # ("Unisex women, Unisex men") contain a comma themselves.
+        if key.lower() == 'gender':
+            values = [val]
+        else:
+            values = [v.strip() for v in val.split(',') if v.strip()]
         if values:
             filters[key] = values
     return filters
