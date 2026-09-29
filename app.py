@@ -2553,7 +2553,7 @@ def classify_batch():
             return jsonify({"error": "items array is required"}), 400
 
         items = data.get('items', [])
-        max_workers = data.get('max_workers', 3)
+        max_workers = data.get('max_workers', 1)
         shopping_category_override = data.get('shopping_category_override', '')
         override_clean = shopping_category_override.lower().strip() if shopping_category_override else ''
         if override_clean and override_clean not in shoppingCategory:
@@ -2688,7 +2688,7 @@ def extract_attributes_batch():
             return jsonify({"error": "items array is required"}), 400
 
         items = data.get('items', [])
-        max_workers = data.get('max_workers', 3)
+        max_workers = data.get('max_workers', 1)
         # Job-level use_vision flag from the admin panel — applies to every
         # item that doesn't specify its own use_vision. None = use global.
         job_use_vision = data.get('use_vision', None)
@@ -3154,7 +3154,7 @@ def standardize_attributes_batch():
             {"ai_attributes": "Color: Navy Blue\\nSize: X-Large"},
             {"ai_attributes_array": ["Color: Red", "Size: Small"]}
         ],
-        "max_workers": 3
+        "max_workers": 1  # default 1 (serialized to respect the OpenAI rate limit)
     }
     """
     try:
@@ -3165,7 +3165,7 @@ def standardize_attributes_batch():
             return jsonify({"error": "items array is required"}), 400
 
         items = data.get('items', [])
-        max_workers = data.get('max_workers', 3)
+        max_workers = data.get('max_workers', 1)
 
         if not isinstance(items, list) or len(items) == 0:
             return jsonify({"error": "items must be a non-empty array"}), 400
@@ -3384,7 +3384,7 @@ def generate_description_batch():
                 }
             }
         ],
-        "max_workers": 3  # Optional, default 3
+        "max_workers": 1  # Optional, default 1 (serialized to respect the OpenAI rate limit)
     }
     """
     try:
@@ -3395,7 +3395,7 @@ def generate_description_batch():
             return jsonify({"error": "items array is required"}), 400
 
         items = data.get('items', [])
-        max_workers = data.get('max_workers', 3)
+        max_workers = data.get('max_workers', 1)
 
         if not isinstance(items, list):
             return jsonify({"error": "items must be an array"}), 400
