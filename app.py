@@ -52,6 +52,17 @@ GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/pr
 USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
 USE_GPT4O_VISION = False  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
 
+# Separate worker lanes for /api/attributes/extract-batch, keyed by each
+# item's own effective use_vision. gpt-4o (vision) has a much lower OpenAI
+# rate-limit tier than gpt-4o-mini (text-only) and can spend minutes retrying
+# 429s — kept at a fixed size of 1 regardless of what a request asks for, so
+# that never scales up into worse 429 storms. Text-only items get their own
+# lane sized from the request's own max_workers, so a vision-heavy batch (or
+# job) can never stall a text-only one waiting behind it, whether they're
+# items in the same batch or items from two different concurrent jobs.
+VISION_ATTRIBUTES_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ai-attrs-vision")
+TEXT_ATTRIBUTES_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ai-attrs-text")
+
 # Translation configuration
 AYA_API_URL = os.getenv("AYA_API_URL", "http://localhost:11434/api/generate")
 AYA_MODEL_NAME = "aya:8b"
@@ -2688,7 +2699,9 @@ def extract_attributes_batch():
             return jsonify({"error": "items array is required"}), 400
 
         items = data.get('items', [])
-        max_workers = data.get('max_workers', 1)
+        # A caller-supplied max_workers is intentionally ignored here — see the
+        # fixed vision/text lanes above; a request can no longer widen the
+        # vision lane into worse 429 storms.
         # Job-level use_vision flag from the admin panel — applies to every
         # item that doesn't specify its own use_vision. None = use global.
         job_use_vision = data.get('use_vision', None)
@@ -2706,19 +2719,27 @@ def extract_attributes_batch():
                     it['use_vision'] = bool(job_use_vision)
 
         total_items = len(items)
-        print(f"\n[Batch Parallel AI Attributes] Processing {total_items} items with {max_workers} workers...")
+        print(f"\n[Batch Parallel AI Attributes] Processing {total_items} items "
+              f"({VISION_ATTRIBUTES_EXECUTOR._max_workers} vision / {TEXT_ATTRIBUTES_EXECUTOR._max_workers} text workers)...")
 
         results = [None] * total_items
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_index = {
-                executor.submit(extract_single_item_attributes, item, idx): idx
-                for idx, item in enumerate(items)
-            }
+        # Route each item to the lane matching ITS OWN effective use_vision (a
+        # batch can mix modes — see the propagation above) rather than one
+        # local executor sized from the request's max_workers. This is what
+        # keeps a vision item's slow 429 retries from blocking a text-only
+        # item, whether they're in this same batch or a different concurrent
+        # job's batch (both share these same two module-level lanes).
+        future_to_index = {}
+        for idx, item in enumerate(items):
+            item_use_vision = item.get('use_vision') if isinstance(item, dict) else None
+            effective_use_vision = USE_GPT4O_VISION if item_use_vision is None else bool(item_use_vision)
+            lane = VISION_ATTRIBUTES_EXECUTOR if effective_use_vision else TEXT_ATTRIBUTES_EXECUTOR
+            future_to_index[lane.submit(extract_single_item_attributes, item, idx)] = idx
 
-            for future in as_completed(future_to_index):
-                index, result = future.result()
-                results[index] = result
+        for future in as_completed(future_to_index):
+            index, result = future.result()
+            results[index] = result
 
         successful = sum(1 for r in results if r.get('success', False))
         failed = total_items - successful
@@ -4169,4 +4190,9 @@ if __name__ == '__main__':
     print("[INFO] GradProject runs as external service - ensure it's running on port 5000")
     print("")
 
-    app.run(debug=FLASK_DEBUG, host=FLASK_HOST, port=FLASK_PORT)
+    # threaded=True: without it, Werkzeug's dev server handles ONE HTTP request
+    # at a time for the whole app, so two concurrent /extract-batch calls (e.g.
+    # different jobs) queue at the WSGI layer regardless of the executor lanes
+    # above — this is what let a vision job's slow 429 retries starve a
+    # completely unrelated text-only job's request from even starting.
+    app.run(debug=FLASK_DEBUG, host=FLASK_HOST, port=FLASK_PORT, threaded=True)
