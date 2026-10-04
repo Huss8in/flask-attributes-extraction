@@ -51,6 +51,7 @@ GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
 GRADPROJECT_API_URL = os.getenv("GRADPROJECT_API_URL", "http://localhost:5000/predict")  # External GradProject service
 USE_OPENAI_FALLBACK = True  # If True, fall back to OpenAI for color/material when GradProject fails or isn't used
 USE_GPT4O_VISION = False  # If False, skip GPT-4o vision (quota/cost control). Text-only extraction still works.
+MAX_VISION_IMAGES = int(os.getenv("MAX_VISION_IMAGES", "2"))  # Max images sent per item to GPT-4o (85 tokens each at detail=low)
 
 # Separate worker lanes for /api/attributes/extract-batch, keyed by each
 # item's own effective use_vision. gpt-4o (vision) has a much lower OpenAI
@@ -202,7 +203,7 @@ def _compute_stats_snapshot():
         "avg_cost_per_item_usd": round(avg_cost_per_item, 6),
         "image_detail_level": "low",
         "image_tokens_per_image": _LOW_DETAIL_IMAGE_TOKENS,
-        "max_images_per_item": 4,
+        "max_images_per_item": MAX_VISION_IMAGES,
         "vision_model": "gpt-4o",
         "text_model": OPENAI_MODEL_NAME,
         "use_gpt4o_vision_default": USE_GPT4O_VISION,
@@ -1150,7 +1151,7 @@ def get_attribute_template(shopping_category, item_category, shopping_subcategor
     return mapping_lower[lookup_key][0] if lookup_key in mapping_lower else None
 
 
-def _normalize_image_urls(images, limit=4):
+def _normalize_image_urls(images, limit=MAX_VISION_IMAGES):
     """Accept either list of URL strings or list of dicts ({"large":..., "medium":..., "small":...})
     and return a flat, deduplicated list of URL strings (preferring 'large').
 
@@ -1197,7 +1198,7 @@ def run_openai_model(prompt, images=None, use_vision=None):
     supplied (e.g. for cost control on a specific job).
     """
     try:
-        image_urls = _normalize_image_urls(images, limit=4) if images else []
+        image_urls = _normalize_image_urls(images, limit=MAX_VISION_IMAGES) if images else []
         # Per-request flag overrides the global default; when omitted, fall back to USE_GPT4O_VISION.
         effective_use_vision = USE_GPT4O_VISION if use_vision is None else bool(use_vision)
         use_vision_path = bool(image_urls) and effective_use_vision
@@ -1336,7 +1337,7 @@ def extract_ai_attributes(item_name, description, vendor_category, shopping_cate
         return "", {}
 
     # Normalize images: accept either raw URL strings or dicts with large/medium/small.
-    image_urls = _normalize_image_urls(images, limit=4)
+    image_urls = _normalize_image_urls(images, limit=MAX_VISION_IMAGES)
     # Track raw-vs-deduped counts ONCE here (the true entry point for this
     # item's images) — downstream calls (run_openai_model) re-normalize an
     # already-deduped list, so tracking there would double-count.
@@ -2215,7 +2216,7 @@ def extract_single_item_attributes(item_data, index):
 
         # Determine whether GPT-4o vision will actually run for this item
         # (drives the green/red row indicator in the admin panel).
-        _image_urls_norm = _normalize_image_urls(images, limit=4)
+        _image_urls_norm = _normalize_image_urls(images, limit=MAX_VISION_IMAGES)
         vision_used = effective_use_vision and bool(_image_urls_norm)
 
         # Extract attributes
@@ -2658,7 +2659,7 @@ def extract_attributes():
 
         # Determine whether GPT-4o vision will actually run for this item
         # (drives the green/red row indicator in the admin panel).
-        _image_urls_norm = _normalize_image_urls(images, limit=4)
+        _image_urls_norm = _normalize_image_urls(images, limit=MAX_VISION_IMAGES)
         vision_used = effective_use_vision and bool(_image_urls_norm)
 
         # Extract attributes
@@ -4123,7 +4124,7 @@ def usage_stats_page():
     <div class="flow">
       1. Item comes in with N images (URL strings or Shopify-style <code>{{large, medium, small}}</code> objects).<br>
       2. Images are normalized to URLs and <b>deduplicated</b> (case-insensitive) — vendors often reuse the same photo across variants.<br>
-      3. Capped at <b>4 images per item</b>.<br>
+      3. Capped at <b>{MAX_VISION_IMAGES} images per item</b>.<br>
       4. <b>ONE</b> GPT-4o Vision call is made per item with ALL remaining images attached to a single request (not one call per image) — the model cross-references them internally and returns one aggregated set of attributes (Gender, Color, Material, Pattern, Age, Features, etc.).<br>
       5. Each image costs a fixed <b>85 tokens</b> at <code>detail: "low"</code>, regardless of resolution — this is why we don't resize images before sending.<br>
       6. If vision is disabled (<code>USE_GPT4O_VISION=False</code> or per-request <code>use_vision:false</code>), the item is processed <b>text-only</b> via {OPENAI_MODEL_NAME} — much cheaper, no image tokens at all.<br>
