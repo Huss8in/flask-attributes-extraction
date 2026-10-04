@@ -44,7 +44,7 @@ OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 USE_PHI4 = False  # Set to False to use OpenAI gpt-4o-mini
 PHI4_API_URL = os.getenv("API_URL")
 PHI4_MODEL_NAME = "phi4:latest"
-RATE_LIMIT_DELAY = 3.0  # seconds between API calls (OpenAI rate limiting)
+RATE_LIMIT_DELAY = 1.0  # min seconds between category-classification OpenAI calls (was 3.0 — capped big Categories jobs at ~20 calls/min; 429s are retried with backoff)
 
 # AI Attributes configuration
 GRAD_SUPPORTED_CATEGORIES = ["fashion", "home and garden"]
