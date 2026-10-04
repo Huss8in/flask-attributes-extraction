@@ -371,10 +371,17 @@ def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
         # will never recover, so fail fast instead of wasting the retry budget
         # (which otherwise pushes the whole batch past the caller's timeout).
         try:
-            err_code = resp.json().get("error", {}).get("code", "")
+            err = resp.json().get("error", {}) or {}
         except Exception:
-            err_code = ""
-        if err_code == "insufficient_quota":
+            err = {}
+        # OpenAI reports an empty balance as type="insufficient_quota" with
+        # code="credit_balance_exhausted" (older responses used the code for both),
+        # so check both fields — checking only `code` never matched and every item
+        # burned the full retry backoff (job 2132: 612 items x ~37s = 6.5 hours).
+        if err.get("type") == "insufficient_quota" or err.get("code") in ("insufficient_quota", "credit_balance_exhausted"):
+            # raise_for_status() builds its message from resp.reason, so this makes
+            # the failed row/job say what is actually wrong instead of "429 Too Many Requests".
+            resp.reason = "OpenAI credit balance exhausted - add credits at platform.openai.com/settings/organization/billing, then rerun"
             return resp
         retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
         if not retryable or attempt >= max_retries:
