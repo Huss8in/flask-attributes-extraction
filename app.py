@@ -3998,6 +3998,42 @@ def global_health():
     })
 
 
+@app.route('/api/openai/probe', methods=['POST'])
+def openai_probe():
+    """One-token test call per model, using THIS service's API key, so the panel
+    can show whether credits/limits are OK for the text (mini) and image (gpt-4o)
+    paths. Deliberately a plain requests.post: no retries/backoff (a probe must not
+    wait out a rate limit) and it doesn't touch the job usage counters. Costs
+    ~$0.000002 (mini) and ~$0.00003 (gpt-4o) per call; a rejected call costs nothing."""
+    out = {}
+    for name, model in (("text", OPENAI_MODEL_NAME), ("image", "gpt-4o")):
+        started = time.time()
+        try:
+            r = requests.post(
+                OPENAI_API_URL,
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1},
+                timeout=20,
+            )
+            try:
+                body = r.json()
+            except Exception:
+                body = {}
+            out[name] = {
+                "model": model,
+                "http_status": r.status_code,
+                "error": body.get("error"),
+                "usage": body.get("usage"),
+                "remaining_tokens": r.headers.get("x-ratelimit-remaining-tokens"),
+                "limit_tokens": r.headers.get("x-ratelimit-limit-tokens"),
+                "project_limit_tokens": r.headers.get("x-ratelimit-limit-project-tokens"),
+                "ms": int((time.time() - started) * 1000),
+            }
+        except Exception as e:
+            out[name] = {"model": model, "http_status": None, "exception": str(e), "ms": int((time.time() - started) * 1000)}
+    return jsonify(out)
+
+
 @app.route('/api/stats', methods=['GET'])
 def usage_stats_json():
     """Raw JSON usage/cost stats — same data the /stats HTML page renders."""
