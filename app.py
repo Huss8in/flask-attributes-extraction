@@ -382,7 +382,11 @@ def openai_post_with_retry(payload, headers, max_retries=5, timeout=120):
         if err.get("type") == "insufficient_quota" or err.get("code") in ("insufficient_quota", "credit_balance_exhausted"):
             # raise_for_status() builds its message from resp.reason, so this makes
             # the failed row/job say what is actually wrong instead of "429 Too Many Requests".
-            resp.reason = "OpenAI credit balance exhausted - add credits at platform.openai.com/settings/organization/billing, then rerun"
+            resp.reason = (
+                "OpenAI project spend limit reached - raise the limit in OpenAI under Settings > Project > Limits (adding credits will not fix it), then rerun"
+                if err.get("code") == "project_spend_limit_exceeded"
+                else "OpenAI credit balance exhausted - add credits at platform.openai.com/settings/organization/billing, then rerun"
+            )
             return resp
         retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
         if not retryable or attempt >= max_retries:
